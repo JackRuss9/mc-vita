@@ -115,7 +115,9 @@ target_include_directories(tmc PRIVATE
 # region.h in every file, as Picori's build does (MULTI_REGION switches its
 # macros to the region found at run time)
 target_compile_options(tmc PRIVATE "SHELL:-include ${P}/include/region.h")
-set(COMMON_FLAGS -O2 -g -fno-strict-aliasing -fwrapv -fno-strict-overflow -funsigned-char
+# 4-byte enums, as on the PC (the ARM EABI default packs them, and the decomp
+# declares functions taking an enum as taking u32).
+set(COMMON_FLAGS -O2 -g -fno-short-enums -fno-strict-aliasing -fwrapv -fno-strict-overflow -funsigned-char
   -Wno-unused-parameter -Wno-missing-field-initializers)
 target_compile_options(tmc PRIVATE ${COMMON_FLAGS}
   $<$<COMPILE_LANGUAGE:C>:-std=gnu11> $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++20>)

@@ -34,3 +34,11 @@
 - printf family wrapped for %zu (VitaSDK newlib has no C99 formats).
 - Compile check without VitaSDK: clang --target=armv7a with VitaSDK headers
   (uint32_t forced to unsigned long as in GCC): all 741 files compile.
+
+## Enums
+- The decomp needs 4-byte enums (it declares enum-taking functions as u32):
+  -fno-short-enums, while VitaSDK's libraries and SDL3 keep the EABI's packed
+  enums (SDL disables its own enum-size assert on the Vita). The SDL structs
+  Picori shares that hold enums (SDL_AudioSpec.format, the keyboard event's
+  scancode) keep the same field offsets either way (alignment), and enums
+  passed by value are registers.
