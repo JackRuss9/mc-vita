@@ -106,7 +106,9 @@ target_compile_definitions(tmc PRIVATE
   PC_PORT NON_MATCHING USE_HDMA USA ENGLISH REVISION=0 MULTI_REGION TMC_VITA
   TMC_PC_VERSION="0.9.6" TMC_PORT_VERSION="0.9.6"
   MODE1_GBA_WIDTH=${TMC_WIDESCREEN_WIDTH} FMT_HEADER_ONLY=1
-  TMC_VITA_COMMIT="${TMC_VITA_COMMIT}")
+  TMC_VITA_COMMIT="${TMC_VITA_COMMIT}"
+  # no "open in the system's shell" in ImGui (fork/execvp: none on the Vita)
+  IMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS)
 target_include_directories(tmc PRIVATE
   ${CMAKE_SOURCE_DIR}/vita/include ${GEN} ${P}/include ${P}/libs ${P}/port ${P} ${P}/build/USA ${P}/port/ppu/include
   ${P}/port/shaders/build ${P}/libs/VirtuaAPU/include ${P}/libs/agbplay_core
