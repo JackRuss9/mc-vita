@@ -129,6 +129,10 @@ target_link_options(tmc PRIVATE -Wl,-q -Wl,--no-enum-size-warning)
 # libstdc++'s threads on (vita/src/vita_threads.cpp): the symbol it checks for,
 # and 1 MiB stacks for threads made without attributes.
 target_link_options(tmc PRIVATE -Wl,-u,pthread_cancel -Wl,--wrap=pthread_create)
+# Local statics guarded with a Vita mutex (vita/src/vita_guard.cpp)
+foreach(fn __cxa_guard_acquire __cxa_guard_release __cxa_guard_abort)
+  target_link_options(tmc PRIVATE -Wl,--wrap=${fn})
+endforeach()
 # newlib here has no C99 printf formats (%zu): the printf family is wrapped to
 # rewrite them (vita/src/printf_c99.cpp).
 foreach(fn printf fprintf sprintf snprintf vprintf vfprintf vsprintf vsnprintf)

@@ -42,3 +42,10 @@
   Picori shares that hold enums (SDL_AudioSpec.format, the keyboard event's
   scancode) keep the same field offsets either way (alignment), and enums
   passed by value are registers.
+
+## Local statics
+- First run crashed in the start menu: ImGui_ImplSDL3_NewFrame's local static
+  -> libstdc++'s __cxa_guard_acquire -> pthread_mutex_lock(NULL): its global
+  mutex (made through pthread_once) was never made. vita_guard.cpp replaces
+  the three __cxa_guard functions (--wrap) with a recursive Vita kernel
+  mutex; the self-test logs whether pthread_once runs its routine.

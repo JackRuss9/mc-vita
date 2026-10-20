@@ -41,8 +41,16 @@ extern "C" int __wrap_pthread_create(pthread_t* th, const pthread_attr_t* attr, 
 
 // After vita_start.c has opened the log: does std::thread work? (the log
 // says so, or why not)
+static int sOnceRuns = 0;
+static void tmc_vita_once(void) { sOnceRuns++; }
+
 __attribute__((constructor(110))) static void tmc_vita_threads_check(void)
 {
+    // pthread_once: libstdc++ sets up its own locks through it
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    const int onceResult = pthread_once(&once, tmc_vita_once);
+    fprintf(stderr, "[vita] pthread_once: result %d, ran %d time(s)\n", onceResult, sOnceRuns);
+    fprintf(stderr, "[vita] threads: testing std::thread\n");
     try {
         int value = 0;
         std::mutex m;
