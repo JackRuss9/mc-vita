@@ -1,0 +1,1344 @@
+diff --git a/include/enemy/vaatiWrath.h b/include/enemy/vaatiWrath.h
+index c312d14..6cbc3d9 100644
+--- a/include/enemy/vaatiWrath.h
++++ b/include/enemy/vaatiWrath.h
+@@ -4,7 +4,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 unused1[5 + 4];
+ #else
+     /*0x68*/ u8 unused1[5];
+diff --git a/include/gba/types.h b/include/gba/types.h
+index c0150f4..536acae 100644
+--- a/include/gba/types.h
++++ b/include/gba/types.h
+@@ -5,8 +5,8 @@
+ 
+ typedef uint8_t u8;
+ typedef uint16_t u16;
+-#ifdef TMC_N64
+-/* mips64-newlib makes uint32_t 'unsigned long' — a type distinct from 'unsigned int'
++#if defined(TMC_N64) || defined(TMC_VITA)
++/* mips64-newlib (and VitaSDK's arm newlib) makes uint32_t 'unsigned long' — a type distinct from 'unsigned int'
+  * and from enum underlying types, which breaks function-prototype/enum compatibility
+  * the decomp relies on (it holds on x86 where uint32_t == unsigned int). Use plain
+  * 'unsigned int' on N64: still 32-bit under o64, and matches the x86 type identity. */
+@@ -17,7 +17,7 @@ typedef uint32_t u32;
+ typedef uint64_t u64;
+ typedef int8_t s8;
+ typedef int16_t s16;
+-#ifdef TMC_N64
++#if defined(TMC_N64) || defined(TMC_VITA)
+ typedef int s32;
+ #else
+ typedef int32_t s32;
+diff --git a/include/global.h b/include/global.h
+index aeacb72..61719c1 100644
+--- a/include/global.h
++++ b/include/global.h
+@@ -86,10 +86,12 @@
+ #endif
+ 
+ #if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
++#define PORT_POINTERS_ARE_64_BIT 1
+ #define PORT_STATIC_ASSERT_SIZE(type, gba_size, pc_size, msg) static_assert(sizeof(type) == (pc_size), msg)
+ #define PORT_STATIC_ASSERT_EXPR(expr, gba_size, pc_size, msg) static_assert((expr) == (pc_size), msg)
+ #define PORT_STATIC_ASSERT_OFFSET(type, field, gba_off, pc_off, msg) static_assert(offsetof(type, field) == (pc_off), msg)
+ #else
++#define PORT_POINTERS_ARE_64_BIT 0
+ #define PORT_STATIC_ASSERT_SIZE(type, gba_size, pc_size, msg) static_assert(sizeof(type) == (gba_size), msg)
+ #define PORT_STATIC_ASSERT_EXPR(expr, gba_size, pc_size, msg) static_assert((expr) == (gba_size), msg)
+ #define PORT_STATIC_ASSERT_OFFSET(type, field, gba_off, pc_off, msg) static_assert(offsetof(type, field) == (gba_off), msg)
+diff --git a/port/port_asset_pak_loader.cpp b/port/port_asset_pak_loader.cpp
+index 307540f..6715a7d 100644
+--- a/port/port_asset_pak_loader.cpp
++++ b/port/port_asset_pak_loader.cpp
+@@ -11,6 +11,9 @@
+ #ifdef _WIN32
+ #define WIN32_LEAN_AND_MEAN
+ #include <windows.h>
++#elif defined(TMC_VITA)
++#include <cstdio>
++#include <cstdlib>
+ #else
+ #include <fcntl.h>
+ #include <sys/mman.h>
+@@ -92,6 +95,10 @@ void PakArchive::Close() {
+         CloseHandle(static_cast<HANDLE>(file_handle_));
+         file_handle_ = nullptr;
+     }
++#elif defined(TMC_VITA)
++    /* the Vita: no mmap; the archive was read into memory */
++    std::free(const_cast<uint8_t*>(base_));
++    base_ = nullptr;
+ #else
+     if (base_ != nullptr) {
+         munmap(const_cast<uint8_t*>(base_), size_);
+@@ -143,6 +150,27 @@ bool PakArchive::Open(const std::filesystem::path& path, std::string* error_out)
+     mapping_handle_ = mh;
+     base_ = static_cast<const uint8_t*>(view);
+     size_ = static_cast<std::size_t>(size_li.QuadPart);
++#elif defined(TMC_VITA)
++    {  // the Vita has no mmap: read the whole archive into memory
++        std::FILE* f = std::fopen(path.c_str(), "rb");
++        if (!f) {
++            SetError(error_out, "open failed for " + path.string());
++            return false;
++        }
++        std::fseek(f, 0, SEEK_END);
++        const long len = std::ftell(f);
++        std::fseek(f, 0, SEEK_SET);
++        uint8_t* buf = len >= static_cast<long>(kHeaderSize) ? static_cast<uint8_t*>(std::malloc(len)) : nullptr;
++        if (!buf || std::fread(buf, 1, static_cast<std::size_t>(len), f) != static_cast<std::size_t>(len)) {
++            std::free(buf);
++            std::fclose(f);
++            SetError(error_out, "pak file too small or unreadable: " + path.string());
++            return false;
++        }
++        std::fclose(f);
++        base_ = buf;
++        size_ = static_cast<std::size_t>(len);
++    }
+ #else
+     int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+     if (fd < 0) {
+diff --git a/port/port_exe_path.cpp b/port/port_exe_path.cpp
+index 74dd4d8..719113e 100644
+--- a/port/port_exe_path.cpp
++++ b/port/port_exe_path.cpp
+@@ -9,6 +9,8 @@
+ #elif defined(__APPLE__)
+ #include <cstdint>
+ #include <mach-o/dyld.h>
++#elif defined(TMC_VITA)
++#include "vita_paths.h"
+ #else
+ #include <climits>
+ #include <unistd.h>
+@@ -47,6 +49,10 @@ std::optional<std::filesystem::path> ExecutableDir() {
+         }
+     }
+     return std::nullopt;
++#elif defined(TMC_VITA)
++    /* The Vita: the ROM, saves and the asset cache all live in the data
++     * folder (sms-vita style), not beside the read-only app (app0:). */
++    return std::filesystem::path(TMC_VITA_DATA_DIR);
+ #else
+     char buffer[PATH_MAX];
+     ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer));
+diff --git a/port/port_gameplay_stubs.c b/port/port_gameplay_stubs.c
+index 0fd1133..f2d6c10 100644
+--- a/port/port_gameplay_stubs.c
++++ b/port/port_gameplay_stubs.c
+@@ -24,7 +24,7 @@
+  * on Windows. The cutscene-watchdog fix doesn't depend on it — it's
+  * only used to identify the call path that deletes orchestrator
+  * entities during #93 debug. */
+-#if !defined(_WIN32) && !defined(__MINGW32__) && !defined(__MINGW64__) && !defined(TMC_N64) && !defined(__ANDROID__)
++#if !defined(_WIN32) && !defined(__MINGW32__) && !defined(__MINGW64__) && !defined(TMC_N64) && !defined(__ANDROID__) && !defined(TMC_VITA)
+ #include <execinfo.h>
+ #define PORT_HAVE_EXECINFO 1
+ #else
+diff --git a/port/port_imgui_randomizer_tab.inc b/port/port_imgui_randomizer_tab.inc
+index b2e70e1..11efc7f 100644
+--- a/port/port_imgui_randomizer_tab.inc
++++ b/port/port_imgui_randomizer_tab.inc
+@@ -1251,11 +1251,11 @@ static void DrawRibbonRandomizerTab(void) {
+ 
+     if (!sRandoUiSettings.glitchless_logic) {
+         ImGui::SeparatorText("Glitch tricks (progression may be placed behind these)");
+-        if (ImGui::CheckboxFlags(kRandoTrickOcarina, &sRandoUiSettings.tricks, RANDO_TRICK_OCARINA_GLITCH))
++        if (ImGui::CheckboxFlags(kRandoTrickOcarina, reinterpret_cast<unsigned int*>(&sRandoUiSettings.tricks), RANDO_TRICK_OCARINA_GLITCH))
+             changed = true;
+-        if (ImGui::CheckboxFlags(kRandoTrickCrenel, &sRandoUiSettings.tricks, RANDO_TRICK_CRENEL_CLIP))
++        if (ImGui::CheckboxFlags(kRandoTrickCrenel, reinterpret_cast<unsigned int*>(&sRandoUiSettings.tricks), RANDO_TRICK_CRENEL_CLIP))
+             changed = true;
+-        if (ImGui::CheckboxFlags(kRandoTrickPjs, &sRandoUiSettings.tricks, RANDO_TRICK_PORTAL_JUMP_STORAGE))
++        if (ImGui::CheckboxFlags(kRandoTrickPjs, reinterpret_cast<unsigned int*>(&sRandoUiSettings.tricks), RANDO_TRICK_PORTAL_JUMP_STORAGE))
+             changed = true;
+     } else {
+         ImGui::TextDisabled("Glitch tricks are selectable when Glitchless logic is OFF.");
+diff --git a/port/port_stubs.c b/port/port_stubs.c
+index b20c88d..b7f3b1c 100644
+--- a/port/port_stubs.c
++++ b/port/port_stubs.c
+@@ -44,12 +44,14 @@ u32 GetNextScriptCommandHalfword(u16* ptr) {
+             /* Not in ROM — check if it's a plausible native pointer.
+              * On 64-bit Windows, user-mode addresses have upper 16+ bits zero.
+              * If upper 32 bits are non-zero and it's not a valid heap/stack range, reject it. */
++#if UINTPTR_MAX > 0xFFFFFFFFu
+             if ((addr >> 48) != 0) {
+                 fprintf(stderr,
+                         "[SCRIPT] FATAL: GetNextScriptCommandHalfword corrupted ptr=%p entity context corrupted\n",
+                         (void*)ptr);
+                 return 0xFFFF;
+             }
++#endif
+         }
+     }
+ #endif
+diff --git a/port/port_tts.cpp b/port/port_tts.cpp
+index 751dacf..f9b751b 100644
+--- a/port/port_tts.cpp
++++ b/port/port_tts.cpp
+@@ -21,8 +21,8 @@
+ #include "port_tts.h"
+ #include "port_runtime_config.h"
+ 
+-#ifdef __ANDROID__
+-/* No subprocess TTS backends exist on Android (spd-say/say/SAPI are desktop).
++#if defined(__ANDROID__) || defined(TMC_VITA)
++/* No subprocess TTS backends exist on Android (nor on the Vita) (spd-say/say/SAPI are desktop).
+  * Native TTS via android.speech.tts + JNI is a planned later milestone; until
+  * then the whole a11y-speech surface is a well-behaved no-op so the rest of
+  * the port (menus, config plumbing) links and runs unchanged. */
+diff --git a/port/port_types.h b/port/port_types.h
+index f654347..fca2506 100644
+--- a/port/port_types.h
++++ b/port/port_types.h
+@@ -12,7 +12,7 @@
+ // Type definitions for GBA-style fixed-width types
+ typedef uint8_t u8;
+ typedef uint16_t u16;
+-#ifdef TMC_N64
++#if defined(TMC_N64) || defined(TMC_VITA)
+ typedef unsigned int u32; /* match gba/types.h: mips-newlib uint32_t is 'unsigned long' */
+ #else
+ typedef uint32_t u32;
+@@ -21,7 +21,7 @@ typedef uint64_t u64;
+ 
+ typedef int8_t s8;
+ typedef int16_t s16;
+-#ifdef TMC_N64
++#if defined(TMC_N64) || defined(TMC_VITA)
+ typedef int s32;
+ #else
+ typedef int32_t s32;
+@@ -44,7 +44,7 @@ PORT_STATIC_ASSERT(sizeof(s32) == 4, "s32 must be 4 bytes");
+ PORT_STATIC_ASSERT(sizeof(s64) == 8, "s64 must be 8 bytes");
+ // Pointer assertions — the PC port targets 64-bit systems only. The N64
+ // target is the lone 32-bit-pointer consumer of this header.
+-#ifndef TMC_N64
++#if !defined(TMC_N64) && !defined(TMC_VITA)
+ PORT_STATIC_ASSERT(sizeof(void*) == 8, "PC port targets 64-bit systems only");
+ #endif
+ 
+diff --git a/src/enemy/armos.c b/src/enemy/armos.c
+index a373017..d906de3 100644
+--- a/src/enemy/armos.c
++++ b/src/enemy/armos.c
+@@ -22,7 +22,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 unk_68[0x10 + 4]; /* #98/#99 pattern: +4 for Enemy::child PC growth */
+ #else
+     /*0x68*/ u8 unk_68[0x10];
+diff --git a/src/enemy/ballChainSoldier.c b/src/enemy/ballChainSoldier.c
+index 9e33107..c5899db 100644
+--- a/src/enemy/ballChainSoldier.c
++++ b/src/enemy/ballChainSoldier.c
+@@ -14,7 +14,7 @@
+ 
+ typedef struct {
+     Entity base;
+-    #ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0x10 + 4];
+ #else
+     u8 filler[0x10];
+diff --git a/src/enemy/beetle.c b/src/enemy/beetle.c
+index 501b7a2..e930f40 100644
+--- a/src/enemy/beetle.c
++++ b/src/enemy/beetle.c
+@@ -13,7 +13,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #98 fix: +4 for Enemy::child PC growth. Without it, unk_86 (GBA 0x86 =
+        spritePtr.hi, 0 for a scriptless beetle, read-before-write as a cooldown
+        gate in sub_08021D00) aliases Enemy::field_0x82 = yPos (nonzero) on PC, so
+diff --git a/src/enemy/bladeTrap.c b/src/enemy/bladeTrap.c
+index 20b5ada..2331e9e 100644
+--- a/src/enemy/bladeTrap.c
++++ b/src/enemy/bladeTrap.c
+@@ -11,7 +11,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[12 + 4];
+ #else
+     /*0x68*/ u8 unused1[12];
+diff --git a/src/enemy/bobomb.c b/src/enemy/bobomb.c
+index 00f9035..1aadbbd 100644
+--- a/src/enemy/bobomb.c
++++ b/src/enemy/bobomb.c
+@@ -15,7 +15,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[24 + 8];
+ #else
+     /*0x68*/ u8 unused1[24];
+diff --git a/src/enemy/bombPeahat.c b/src/enemy/bombPeahat.c
+index a0c94cb..59e90ec 100644
+--- a/src/enemy/bombPeahat.c
++++ b/src/enemy/bombPeahat.c
+@@ -24,7 +24,7 @@ extern int Port_Widescreen_EffectiveViewWidth(void);
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[16 + 4];
+ #else
+     /*0x68*/ u8 unused1[16];
+@@ -33,7 +33,7 @@ typedef struct {
+     /*0x79*/ u8 unk_79;
+     /*0x7a*/ u8 unk_7a;
+     /*0x7b*/ u8 unk_7b;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x7c*/ u8 unused2[4 + 4];
+ #else
+     /*0x7c*/ u8 unused2[4];
+diff --git a/src/enemy/bombarossa.c b/src/enemy/bombarossa.c
+index 7883a87..a1ba816 100644
+--- a/src/enemy/bombarossa.c
++++ b/src/enemy/bombarossa.c
+@@ -14,7 +14,7 @@
+ 
+ typedef struct {
+     Entity base;
+-    #ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0xe + 4];
+ #else
+     u8 filler[0xe];
+diff --git a/src/enemy/bowMoblin.c b/src/enemy/bowMoblin.c
+index f64f650..8e7a705 100644
+--- a/src/enemy/bowMoblin.c
++++ b/src/enemy/bowMoblin.c
+@@ -14,7 +14,7 @@
+ 
+ typedef struct {
+     Entity base;
+-    #ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0x12 + 4];
+ #else
+     u8 filler[0x12];
+diff --git a/src/enemy/businessScrub.c b/src/enemy/businessScrub.c
+index ee9347e..587e44a 100644
+--- a/src/enemy/businessScrub.c
++++ b/src/enemy/businessScrub.c
+@@ -35,7 +35,7 @@ struct SalesOffering {
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 unused1[12 + 4];  /* #98/#99 pattern: +4 for Enemy::child PC growth */
+ #else
+     /*0x68*/ u8 unused1[12];
+diff --git a/src/enemy/businessScrubPrologue.c b/src/enemy/businessScrubPrologue.c
+index 358afce..8ed846d 100644
+--- a/src/enemy/businessScrubPrologue.c
++++ b/src/enemy/businessScrubPrologue.c
+@@ -19,7 +19,7 @@
+ 
+ typedef struct {
+     Entity base;
+-    #ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0x10 + 4];
+ #else
+     u8 filler[0x10];
+diff --git a/src/enemy/cloudPiranha.c b/src/enemy/cloudPiranha.c
+index 3100ef1..da1010a 100644
+--- a/src/enemy/cloudPiranha.c
++++ b/src/enemy/cloudPiranha.c
+@@ -16,7 +16,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-    /*0x68*/ #ifdef PC_PORT
++    /*0x68*/ #if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 unk_68[0x18 + 4];
+ #else
+     u8 unk_68[0x18];
+diff --git a/src/enemy/crow.c b/src/enemy/crow.c
+index e0bcd50..6ee36db 100644
+--- a/src/enemy/crow.c
++++ b/src/enemy/crow.c
+@@ -12,7 +12,7 @@
+ 
+ typedef struct {
+     Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #98 fix: +4 for Enemy::child PC growth. Without it, unk_82 (the dive
+        countdown, GBA 0x82 = the spawn yPos param read-before-write in the
+        dive state) aliases Enemy::field_0x7c on PC, so crows dive for the wrong
+diff --git a/src/enemy/cuccoAggr.c b/src/enemy/cuccoAggr.c
+index 5a57242..32a4164 100644
+--- a/src/enemy/cuccoAggr.c
++++ b/src/enemy/cuccoAggr.c
+@@ -25,7 +25,7 @@ extern int Port_Widescreen_EffectiveViewWidth(void);
+ 
+ typedef struct {
+     Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0x10 + 4];
+ #else
+     u8 filler[0x10];
+diff --git a/src/enemy/darkNut.c b/src/enemy/darkNut.c
+index 58db3fc..efb32cc 100644
+--- a/src/enemy/darkNut.c
++++ b/src/enemy/darkNut.c
+@@ -12,7 +12,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[12 + 4];
+ #else
+     /*0x68*/ u8 unused1[12];
+diff --git a/src/enemy/doorMimic.c b/src/enemy/doorMimic.c
+index c46c58c..f544234 100644
+--- a/src/enemy/doorMimic.c
++++ b/src/enemy/doorMimic.c
+@@ -15,7 +15,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[16 + 4];
+ #else
+     /*0x68*/ u8 unused1[16];
+diff --git a/src/enemy/dust.c b/src/enemy/dust.c
+index 9577362..d9b9b85 100644
+--- a/src/enemy/dust.c
++++ b/src/enemy/dust.c
+@@ -19,7 +19,7 @@
+ 
+ typedef struct {
+     Entity base;
+-    #ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0xc + 4];
+ #else
+     u8 filler[0xc];
+diff --git a/src/enemy/enemy4D.c b/src/enemy/enemy4D.c
+index 5252f61..dabaa37 100644
+--- a/src/enemy/enemy4D.c
++++ b/src/enemy/enemy4D.c
+@@ -14,7 +14,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #98 / #99 pattern: Enemy::child is 8 bytes on PC (vs 4 on GBA),
+        so without 4 bytes of padding here the framework's
+        Enemy::child write stomps unk_6d and the early state bytes.
+diff --git a/src/enemy/enemy50.c b/src/enemy/enemy50.c
+index df90618..017328d 100644
+--- a/src/enemy/enemy50.c
++++ b/src/enemy/enemy50.c
+@@ -15,7 +15,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #98 / #99 pattern: 4-byte pad so Enemy::child's 8-byte pointer
+        write doesn't stomp unk_6d. Same template as eyegore.c. */
+     u8 unk_68[0x5 + 4];
+diff --git a/src/enemy/enemy64.c b/src/enemy/enemy64.c
+index 5570b30..723ade3 100644
+--- a/src/enemy/enemy64.c
++++ b/src/enemy/enemy64.c
+@@ -20,7 +20,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-    /*0x68*/ #ifdef PC_PORT
++    /*0x68*/ #if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 unk_68[0x6 + 4];
+ #else
+     u8 unk_68[0x6];
+diff --git a/src/enemy/eyegore.c b/src/enemy/eyegore.c
+index a2cee3f..b9bd6c6 100644
+--- a/src/enemy/eyegore.c
++++ b/src/enemy/eyegore.c
+@@ -18,7 +18,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #98 fix: on 64-bit PC, Enemy::child is an 8-byte pointer (vs 4 on
+        GBA). The Enemy struct's fields therefore sit 4 bytes further from
+        the Entity base than this struct's bare 0x68 offset comment
+diff --git a/src/enemy/fallingBoulder.c b/src/enemy/fallingBoulder.c
+index d24e6f7..3e74f7f 100644
+--- a/src/enemy/fallingBoulder.c
++++ b/src/enemy/fallingBoulder.c
+@@ -14,7 +14,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[18 + 4];
+ #else
+     /*0x68*/ u8 unused1[18];
+@@ -22,7 +22,7 @@ typedef struct {
+     /*0x7a*/ u16 unk_7a;
+     /*0x7c*/ u16 unk_7c;
+     /*0x7e*/ u16 unk_7e;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler_7c_pc[4];
+ #endif
+     /*0x80*/ u16 unk_80;
+diff --git a/src/enemy/fireballGuy.c b/src/enemy/fireballGuy.c
+index cfabc68..99a67c4 100644
+--- a/src/enemy/fireballGuy.c
++++ b/src/enemy/fireballGuy.c
+@@ -13,7 +13,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[28 + 8];
+ #else
+     /*0x68*/ u8 unused1[28];
+diff --git a/src/enemy/flyingPot.c b/src/enemy/flyingPot.c
+index 9bb121c..f280725 100644
+--- a/src/enemy/flyingPot.c
++++ b/src/enemy/flyingPot.c
+@@ -17,7 +17,7 @@ extern Hitbox gUnk_080FD34C;
+ 
+ typedef struct {
+     /* 0x00 */ Entity base;
+-    /* 0x68 */ #ifdef PC_PORT
++    /* 0x68 */ #if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0xC + 4];
+ #else
+     u8 filler[0xC];
+diff --git a/src/enemy/flyingSkull.c b/src/enemy/flyingSkull.c
+index 07458b2..e705961 100644
+--- a/src/enemy/flyingSkull.c
++++ b/src/enemy/flyingSkull.c
+@@ -18,7 +18,7 @@
+ 
+ typedef struct {
+     Entity base;
+-    #ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0xc + 4];
+ #else
+     u8 filler[0xc];
+diff --git a/src/enemy/ghini.c b/src/enemy/ghini.c
+index 034e255..01292a3 100644
+--- a/src/enemy/ghini.c
++++ b/src/enemy/ghini.c
+@@ -14,7 +14,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-    /*0x68*/ #ifdef PC_PORT
++    /*0x68*/ #if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 unk_68[0x10 + 4];
+ #else
+     u8 unk_68[0x10];
+diff --git a/src/enemy/gibdo.c b/src/enemy/gibdo.c
+index ce90010..69c1f2c 100644
+--- a/src/enemy/gibdo.c
++++ b/src/enemy/gibdo.c
+@@ -17,7 +17,7 @@
+ 
+ typedef struct {
+     Entity base;
+-    #ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0xc + 4];
+ #else
+     u8 filler[0xc];
+diff --git a/src/enemy/gleerok.c b/src/enemy/gleerok.c
+index 8da7a0d..abe3fae 100644
+--- a/src/enemy/gleerok.c
++++ b/src/enemy/gleerok.c
+@@ -54,7 +54,7 @@ PORT_STATIC_ASSERT_EXPR(offsetof(Gleerok_HeapStruct, unk_30), 0x30, 0x30,
+ 
+ typedef struct {
+     Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0xc + 4];
+ #else
+     u8 filler[0xc];
+diff --git a/src/enemy/gyorgMaleEye.c b/src/enemy/gyorgMaleEye.c
+index 836493b..213b63d 100644
+--- a/src/enemy/gyorgMaleEye.c
++++ b/src/enemy/gyorgMaleEye.c
+@@ -12,7 +12,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-/*0x68*/ #ifdef PC_PORT
++/*0x68*/ #if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 unk_68[0x10 + 4];
+ #else
+     u8 unk_68[0x10];
+diff --git a/src/enemy/helmasaur.c b/src/enemy/helmasaur.c
+index 2d2751a..b8f3d84 100644
+--- a/src/enemy/helmasaur.c
++++ b/src/enemy/helmasaur.c
+@@ -16,7 +16,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[16 + 4];
+ #else
+     /*0x68*/ u8 unused1[16];
+diff --git a/src/enemy/keaton.c b/src/enemy/keaton.c
+index ca6b561..1da8a04 100644
+--- a/src/enemy/keaton.c
++++ b/src/enemy/keaton.c
+@@ -13,7 +13,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[12 + 4];
+ #else
+     /*0x68*/ u8 unused1[12];
+diff --git a/src/enemy/keese.c b/src/enemy/keese.c
+index 1cbe729..65042ed 100644
+--- a/src/enemy/keese.c
++++ b/src/enemy/keese.c
+@@ -13,7 +13,7 @@
+ 
+ typedef struct {
+     /* 0x00 */ Entity base;
+-    /* 0x68 */ #ifdef PC_PORT
++    /* 0x68 */ #if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0x10 + 4];
+ #else
+     u8 filler[0x10];
+diff --git a/src/enemy/lakitu.c b/src/enemy/lakitu.c
+index a0e5e3c..d6d7883 100644
+--- a/src/enemy/lakitu.c
++++ b/src/enemy/lakitu.c
+@@ -14,7 +14,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[12 + 4];
+ #else
+     /*0x68*/ u8 unused1[12];
+diff --git a/src/enemy/lakituCloud.c b/src/enemy/lakituCloud.c
+index 99ae601..396936e 100644
+--- a/src/enemy/lakituCloud.c
++++ b/src/enemy/lakituCloud.c
+@@ -16,7 +16,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[12 + 4];
+ #else
+     /*0x68*/ u8 unused1[12];
+diff --git a/src/enemy/leever.c b/src/enemy/leever.c
+index b2ce97f..8347fd5 100644
+--- a/src/enemy/leever.c
++++ b/src/enemy/leever.c
+@@ -12,7 +12,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[12 + 4];
+ #else
+     /*0x68*/ u8 unused1[12];
+diff --git a/src/enemy/likeLike.c b/src/enemy/likeLike.c
+index c6732fa..4e2ebb1 100644
+--- a/src/enemy/likeLike.c
++++ b/src/enemy/likeLike.c
+@@ -17,7 +17,7 @@
+ 
+ typedef struct {
+     Entity base;
+-    #ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0x18 + 4];
+ #else
+     u8 filler[0x18];
+diff --git a/src/enemy/madderpillar.c b/src/enemy/madderpillar.c
+index 2df3005..759a74c 100644
+--- a/src/enemy/madderpillar.c
++++ b/src/enemy/madderpillar.c
+@@ -15,7 +15,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #98 fix: Enemy::child is 8 bytes on PC (4 on GBA), so the spawn framework
+        writes this enemy's params 4 bytes higher. Without the +4 pad, unk_86
+        (a spawn-param flag, GBA 0x86 = spritePtr.hi, 0 for scriptless) aliases
+diff --git a/src/enemy/mazaalBracelet.c b/src/enemy/mazaalBracelet.c
+index 56a2f68..a3f5424 100644
+--- a/src/enemy/mazaalBracelet.c
++++ b/src/enemy/mazaalBracelet.c
+@@ -21,7 +21,7 @@
+ 
+ typedef struct MazaalBraceletEntity_ {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #99 fix: same #98 pattern. Pad 4 bytes after Entity base so the
+        unk_74 / unk_78 union slots below land at PC 0xA0 / 0xA4, matching
+        the GBA layout the C decomp assumes. mazaalHead.c type-puns these
+diff --git a/src/enemy/mazaalHead.c b/src/enemy/mazaalHead.c
+index 33cd1e2..1e046ce 100644
+--- a/src/enemy/mazaalHead.c
++++ b/src/enemy/mazaalHead.c
+@@ -22,7 +22,7 @@
+ 
+ typedef struct MazaalHeadEntity_ {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #99 fix: same #98 pattern as EyegoreEntity. On 64-bit PC,
+        Enemy::child is an 8-byte pointer (vs 4 on GBA), so the bytes
+        between Entity base and the Enemy::child slot are 4 more on PC.
+diff --git a/src/enemy/mazaalMacro.c b/src/enemy/mazaalMacro.c
+index 550dc55..eb2b932 100644
+--- a/src/enemy/mazaalMacro.c
++++ b/src/enemy/mazaalMacro.c
+@@ -18,7 +18,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #99 fix: same #98 pattern as EyegoreEntity / MazaalHeadEntity.
+        Enemy::child is 8 bytes on PC vs 4 on GBA; pad to keep unk_6d,
+        unk_78 and `context` aliased correctly with the GBA layout the
+diff --git a/src/enemy/miniFireballGuy.c b/src/enemy/miniFireballGuy.c
+index b94b3ad..d7f3049 100644
+--- a/src/enemy/miniFireballGuy.c
++++ b/src/enemy/miniFireballGuy.c
+@@ -12,7 +12,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #98/#99 pattern: 4-byte pad so post-Entity fields land at
+        Enemy_PC field offsets matching GBA (PC = GBA + 0x2C). */
+     u8 unused1[4 + 4];
+diff --git a/src/enemy/miniSlime.c b/src/enemy/miniSlime.c
+index 0a57e70..ac92844 100644
+--- a/src/enemy/miniSlime.c
++++ b/src/enemy/miniSlime.c
+@@ -12,7 +12,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 unused1[4 + 4];  /* #98/#99 pattern: +4 for Enemy::child PC growth */
+ #else
+     /*0x68*/ u8 unused1[4];
+diff --git a/src/enemy/moldorm.c b/src/enemy/moldorm.c
+index e8ef7c9..06d2f4c 100644
+--- a/src/enemy/moldorm.c
++++ b/src/enemy/moldorm.c
+@@ -14,7 +14,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 unused1[12 + 4]; /* #98/#99 pattern: +4 for Enemy::child PC growth */
+ #else
+     /*0x68*/ u8 unused1[12];
+diff --git a/src/enemy/moldworm.c b/src/enemy/moldworm.c
+index 020e9e7..f2749bc 100644
+--- a/src/enemy/moldworm.c
++++ b/src/enemy/moldworm.c
+@@ -17,7 +17,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 unused1[12 + 4]; /* #98/#99 pattern: +4 for Enemy::child PC growth */
+ #else
+     /*0x68*/ u8 unused1[12];
+diff --git a/src/enemy/mulldozer.c b/src/enemy/mulldozer.c
+index e0d3f35..6bdfe44 100644
+--- a/src/enemy/mulldozer.c
++++ b/src/enemy/mulldozer.c
+@@ -12,7 +12,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 filler[0x18 + 8];
+ #else
+     /*0x68*/ u8 filler[0x18];
+diff --git a/src/enemy/peahat.c b/src/enemy/peahat.c
+index d0690ed..bc331bd 100644
+--- a/src/enemy/peahat.c
++++ b/src/enemy/peahat.c
+@@ -13,7 +13,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[24 + 8];
+ #else
+     /*0x68*/ u8 unused1[24];
+diff --git a/src/enemy/pesto.c b/src/enemy/pesto.c
+index c37545f..812c439 100644
+--- a/src/enemy/pesto.c
++++ b/src/enemy/pesto.c
+@@ -23,7 +23,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[8 + 4];
+ #else
+     /*0x68*/ u8 unused1[8];
+@@ -31,7 +31,7 @@ typedef struct {
+     /*0x70*/ u16 unk_70;
+     /*0x72*/ u8 unused2[6];
+     /*0x78*/ u16 unk_78;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x7a*/ u8 unused3[6 + 4];
+ #else
+     /*0x7a*/ u8 unused3[6];
+diff --git a/src/enemy/puffstool.c b/src/enemy/puffstool.c
+index 9e3bd64..08151b7 100644
+--- a/src/enemy/puffstool.c
++++ b/src/enemy/puffstool.c
+@@ -18,7 +18,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[16 + 4];
+ #else
+     /*0x68*/ u8 unused1[16];
+@@ -28,7 +28,7 @@ typedef struct {
+     /*0x7b*/ u8 unk_7b;
+     /*0x7c*/ u16 unk_7c;
+     /*0x7e*/ u16 unk_7e;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler_7c_pc[4];
+ #endif
+     /*0x80*/ u8 unk_80;
+diff --git a/src/enemy/rollobite.c b/src/enemy/rollobite.c
+index a7c1f3b..d16064a 100644
+--- a/src/enemy/rollobite.c
++++ b/src/enemy/rollobite.c
+@@ -15,7 +15,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[28 + 8];
+ #else
+     /*0x68*/ u8 unused1[28];
+diff --git a/src/enemy/rope.c b/src/enemy/rope.c
+index 05af7e7..68f19dd 100644
+--- a/src/enemy/rope.c
++++ b/src/enemy/rope.c
+@@ -13,7 +13,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[16 + 4];
+ #else
+     /*0x68*/ u8 unused1[16];
+diff --git a/src/enemy/ropeGolden.c b/src/enemy/ropeGolden.c
+index 39eefd2..e5ffed1 100644
+--- a/src/enemy/ropeGolden.c
++++ b/src/enemy/ropeGolden.c
+@@ -16,7 +16,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[16 + 4];
+ #else
+     /*0x68*/ u8 unused1[16];
+diff --git a/src/enemy/rupeeLike.c b/src/enemy/rupeeLike.c
+index fdaa691..9d06196 100644
+--- a/src/enemy/rupeeLike.c
++++ b/src/enemy/rupeeLike.c
+@@ -21,7 +21,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[24 + 8];
+ #else
+     /*0x68*/ u8 unused1[24];
+diff --git a/src/enemy/scissorsBeetle.c b/src/enemy/scissorsBeetle.c
+index 58c6eab..4c0dc66 100644
+--- a/src/enemy/scissorsBeetle.c
++++ b/src/enemy/scissorsBeetle.c
+@@ -14,7 +14,7 @@
+ 
+ typedef struct {
+     Entity base;
+-    #ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0x12 + 4];
+ #else
+     u8 filler[0x12];
+diff --git a/src/enemy/sensorBladeTrap.c b/src/enemy/sensorBladeTrap.c
+index 3b2f70c..b734c83 100644
+--- a/src/enemy/sensorBladeTrap.c
++++ b/src/enemy/sensorBladeTrap.c
+@@ -12,7 +12,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #98 fix: Enemy::child is 8 bytes on PC (4 on GBA), shifting the framework-
+        written spawn params up 4 bytes. Without the +4 pad, unk_84/unk_86 alias
+        Enemy::field_0x80/field_0x82 (xPos/yPos) instead of the spritePtr params
+diff --git a/src/enemy/slime.c b/src/enemy/slime.c
+index e48bab3..7b873a0 100644
+--- a/src/enemy/slime.c
++++ b/src/enemy/slime.c
+@@ -13,7 +13,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[28 + 8];
+ #else
+     /*0x68*/ u8 unused1[28];
+diff --git a/src/enemy/smallPesto.c b/src/enemy/smallPesto.c
+index 4ec3019..7066cd9 100644
+--- a/src/enemy/smallPesto.c
++++ b/src/enemy/smallPesto.c
+@@ -12,7 +12,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[24 + 8];
+ #else
+     /*0x68*/ u8 unused1[24];
+diff --git a/src/enemy/spearMoblin.c b/src/enemy/spearMoblin.c
+index 329db2e..9d0509b 100644
+--- a/src/enemy/spearMoblin.c
++++ b/src/enemy/spearMoblin.c
+@@ -18,14 +18,14 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[18 + 4];
+ #else
+     /*0x68*/ u8 unused1[18];
+ #endif
+     /*0x7a*/ u8 unk_7a;
+     /*0x7b*/ u8 unk_7b;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x7c*/ u8 unused2[4 + 4];
+ #else
+     /*0x7c*/ u8 unused2[4];
+diff --git a/src/enemy/spinyBeetle.c b/src/enemy/spinyBeetle.c
+index 68e061c..6feb910 100644
+--- a/src/enemy/spinyBeetle.c
++++ b/src/enemy/spinyBeetle.c
+@@ -17,7 +17,7 @@
+ 
+ typedef struct {
+     Entity base;
+-    #ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0xc + 4];
+ #else
+     u8 filler[0xc];
+diff --git a/src/enemy/spinyChuchu.c b/src/enemy/spinyChuchu.c
+index b81666f..e87b277 100644
+--- a/src/enemy/spinyChuchu.c
++++ b/src/enemy/spinyChuchu.c
+@@ -13,7 +13,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[24 + 8];
+ #else
+     /*0x68*/ u8 unused1[24];
+diff --git a/src/enemy/stalfos.c b/src/enemy/stalfos.c
+index 666b94e..1b61418 100644
+--- a/src/enemy/stalfos.c
++++ b/src/enemy/stalfos.c
+@@ -17,7 +17,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-    /*0x68*/ #ifdef PC_PORT
++    /*0x68*/ #if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 unk_68[0x10 + 4];
+ #else
+     u8 unk_68[0x10];
+diff --git a/src/enemy/takkuri.c b/src/enemy/takkuri.c
+index 2c17a22..c6ce847 100644
+--- a/src/enemy/takkuri.c
++++ b/src/enemy/takkuri.c
+@@ -26,7 +26,7 @@ extern int Port_Widescreen_EffectiveViewWidth(void);
+ 
+ typedef struct {
+     Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler[0x10 + 4];
+ #else
+     u8 filler[0x10];
+diff --git a/src/enemy/tektite.c b/src/enemy/tektite.c
+index 322b975..8857ad8 100644
+--- a/src/enemy/tektite.c
++++ b/src/enemy/tektite.c
+@@ -11,13 +11,13 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[20 + 4];
+ #else
+     /*0x68*/ u8 unused1[20];
+ #endif
+     /*0x7c*/ u8 unk_7c;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x7d*/ u8 unused2[3 + 4];
+ #else
+     /*0x7d*/ u8 unused2[3];
+diff --git a/src/enemy/tektiteGolden.c b/src/enemy/tektiteGolden.c
+index 18bde42..d70e619 100644
+--- a/src/enemy/tektiteGolden.c
++++ b/src/enemy/tektiteGolden.c
+@@ -13,7 +13,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[24 + 8];
+ #else
+     /*0x68*/ u8 unused1[24];
+diff --git a/src/enemy/torchTrap.c b/src/enemy/torchTrap.c
+index 2c9be84..6984500 100644
+--- a/src/enemy/torchTrap.c
++++ b/src/enemy/torchTrap.c
+@@ -17,7 +17,7 @@
+ 
+ typedef struct {
+     Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #98 fix: Enemy::child is an 8-byte pointer on PC (4 on GBA), so the spawn
+        framework writes this enemy's params (yPos/spritePtr) 4 bytes higher than
+        this struct's bare offsets imply. Without the +4 pad, unk_82/unk_84 read
+diff --git a/src/enemy/vaatiBall.c b/src/enemy/vaatiBall.c
+index e802cc8..54854d1 100644
+--- a/src/enemy/vaatiBall.c
++++ b/src/enemy/vaatiBall.c
+@@ -16,7 +16,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[12 + 4];
+ #else
+     /*0x68*/ u8 unused1[12];
+@@ -28,7 +28,7 @@ typedef struct {
+     /*0x79*/ u8 unk_79;
+     /*0x7a*/ u8 unused3[2];
+     /*0x7c*/ u32 unk_7c;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler_7c_pc[4];
+ #endif
+     /*0x80*/ u8 unk_80;
+diff --git a/src/enemy/vaatiEyesMacro.c b/src/enemy/vaatiEyesMacro.c
+index c4e31d2..2499a8f 100644
+--- a/src/enemy/vaatiEyesMacro.c
++++ b/src/enemy/vaatiEyesMacro.c
+@@ -15,7 +15,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[16 + 4];
+ #else
+     /*0x68*/ u8 unused1[16];
+diff --git a/src/enemy/vaatiProjectile.c b/src/enemy/vaatiProjectile.c
+index f9ea1a0..18f959d 100644
+--- a/src/enemy/vaatiProjectile.c
++++ b/src/enemy/vaatiProjectile.c
+@@ -16,7 +16,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[16 + 4];
+ #else
+     /*0x68*/ u8 unused1[16];
+diff --git a/src/enemy/vaatiRebornEnemy.c b/src/enemy/vaatiRebornEnemy.c
+index 9da6a5f..e45efa9 100644
+--- a/src/enemy/vaatiRebornEnemy.c
++++ b/src/enemy/vaatiRebornEnemy.c
+@@ -17,7 +17,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[12 + 4];
+ #else
+     /*0x68*/ u8 unused1[12];
+@@ -28,7 +28,7 @@ typedef struct {
+     /*0x77*/ u8 unk_77;
+     /*0x78*/ union SplitWord unk_78;
+     /*0x7c*/ union SplitWord unk_7c;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler_7c_pc[4];
+ #endif
+     /*0x80*/ u8 unk_80;
+diff --git a/src/enemy/vaatiTransfigured.c b/src/enemy/vaatiTransfigured.c
+index 5eaa53c..17f1396 100644
+--- a/src/enemy/vaatiTransfigured.c
++++ b/src/enemy/vaatiTransfigured.c
+@@ -17,7 +17,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #98 / #99 pattern: 4-byte pad so Enemy::child's 8-byte pointer
+        write doesn't stomp unk_6d. Same template as eyegore.c. Without
+        it Vaati phase 2 transformed-form behavior is unpredictable. */
+diff --git a/src/enemy/wallMaster.c b/src/enemy/wallMaster.c
+index bba852a..c8a4ec4 100644
+--- a/src/enemy/wallMaster.c
++++ b/src/enemy/wallMaster.c
+@@ -15,7 +15,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #119 — same #98/#99 pattern: 4-byte pad so post-Entity fields
+        land at Enemy_PC offsets matching GBA (PC = GBA + 0x2C).
+        Symptom: floormaster disregards player on TMC PC. */
+diff --git a/src/enemy/wallMaster2.c b/src/enemy/wallMaster2.c
+index 1874b6d..ead4652 100644
+--- a/src/enemy/wallMaster2.c
++++ b/src/enemy/wallMaster2.c
+@@ -15,7 +15,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /* #119 — same #98/#99 pattern: 4-byte pad so post-Entity fields
+        land at Enemy_PC offsets matching GBA (PC = GBA + 0x2C).
+        Symptom: floormaster disregards player on TMC PC. */
+diff --git a/src/enemy/wisp.c b/src/enemy/wisp.c
+index b16526f..77eebfe 100644
+--- a/src/enemy/wisp.c
++++ b/src/enemy/wisp.c
+@@ -15,14 +15,14 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[20 + 4];
+ #else
+     /*0x68*/ u8 unused1[20];
+ #endif
+     /*0x7c*/ u16 unk_7c;
+     /*0x7e*/ u8 unused2[2];
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     u8 filler_7c_pc[4];
+ #endif
+     /*0x80*/ u16 unk_80;
+diff --git a/src/entity.c b/src/entity.c
+index b33763a..a69ec90 100644
+--- a/src/entity.c
++++ b/src/entity.c
+@@ -12,7 +12,7 @@
+ typedef struct Temp {
+     void* prev;
+     void* next;
+-#ifdef PC_PORT
++#if PORT_POINTERS_ARE_64_BIT
+     /*
+      * 64-bit: Must be large enough for the biggest manager struct.
+      * FightManagerHelper / EnemyInteractionManager have Entity* enemies[8]
+diff --git a/src/projectile/ballAndChain.c b/src/projectile/ballAndChain.c
+index d691aa4..651cc71 100644
+--- a/src/projectile/ballAndChain.c
++++ b/src/projectile/ballAndChain.c
+@@ -11,7 +11,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[19 + 4];
+ #else
+     /*0x68*/ u8 unused1[19];
+diff --git a/src/projectile/dirtBallProjectile.c b/src/projectile/dirtBallProjectile.c
+index 41f737f..1787f70 100644
+--- a/src/projectile/dirtBallProjectile.c
++++ b/src/projectile/dirtBallProjectile.c
+@@ -15,7 +15,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused[27 + 8];
+ #else
+     /*0x68*/ u8 unused[27];
+diff --git a/src/projectile/mandiblesProjectile.c b/src/projectile/mandiblesProjectile.c
+index 0f7b89d..cf58d8a 100644
+--- a/src/projectile/mandiblesProjectile.c
++++ b/src/projectile/mandiblesProjectile.c
+@@ -17,7 +17,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[16 + 4];
+ #else
+     /*0x68*/ u8 unused1[16];
+diff --git a/src/projectile/v1DarkMagicProjectile.c b/src/projectile/v1DarkMagicProjectile.c
+index 49cf5e0..4f212b5 100644
+--- a/src/projectile/v1DarkMagicProjectile.c
++++ b/src/projectile/v1DarkMagicProjectile.c
+@@ -16,13 +16,13 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[12 + 4];
+ #else
+     /*0x68*/ u8 unused1[12];
+ #endif
+     /*0x74*/ u8 unk_74;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x75*/ u8 unused2[11 + 4];
+ #else
+     /*0x75*/ u8 unused2[11];
+diff --git a/src/projectile/v3ElectricProjectile.c b/src/projectile/v3ElectricProjectile.c
+index 674eb41..22b17cd 100644
+--- a/src/projectile/v3ElectricProjectile.c
++++ b/src/projectile/v3ElectricProjectile.c
+@@ -15,7 +15,7 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
+-#ifdef PC_PORT
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
+     /*0x68*/ u8 unused1[28 + 4];
+ #else
+     /*0x68*/ u8 unused1[28];
+diff --git a/src/room.c b/src/room.c
+index 625b548..ad41434 100644
+--- a/src/room.c
++++ b/src/room.c
+@@ -93,7 +93,7 @@ Entity* LoadRoomEntity(const EntityData* dat) {
+         entity->id = dat->id;
+         entity->type = dat->type;
+         RegisterRoomEntity(entity, dat);
+-#ifdef PC_PORT
++#if PORT_POINTERS_ARE_64_BIT
+         /* Issue #75 — TempleOfDropletsManager fields after Manager.base
+          * get mis-mapped on PC by the manager-spawn MemCopy in
+          * RegisterRoomEntity. Done AFTER RegisterRoomEntity so the
+@@ -206,7 +206,7 @@ void RegisterRoomEntity(Entity* ent, const EntityData* dat) {
+         }
+     }
+     if (kind == MANAGER) {
+-#ifdef PC_PORT
++#if PORT_POINTERS_ARE_64_BIT
+ 
+         MemCopy(dat, (u8*)ent + sizeof(Manager) + 0x10, sizeof(EntityData));
+ #else
+@@ -229,7 +229,7 @@ void RegisterRoomEntity(Entity* ent, const EntityData* dat) {
+         GE_FIELD(ent, field_0x82)->HWORD = dat->yPos;
+         GE_FIELD(ent, cutsceneBeh)->HWORD = (u16)(spritePtr & 0xFFFF);
+         GE_FIELD(ent, field_0x86)->HWORD = (u16)(spritePtr >> 16);
+-#ifdef PC_PORT
++#if PORT_POINTERS_ARE_64_BIT
+         /* GenericEntity's cutsceneBeh/field_0x86 union is void*-aligned,
+          * so it sits at PC offset 0xB0/0xB2 — but most entity subclass
+          * structs (WarpPointEntity, HeartContainerEntity, GentariCurtain,

@@ -1,0 +1,36 @@
+# Notes
+
+## Base
+- Project Picori (999sian/tmc) at d377558 (v0.9.6, 2026-10-20): SDL3, a
+  software GBA PPU (port/ppu), agbplay audio, Dear ImGui menus, in-process
+  asset extraction from the ROM at first start (packs in assets/<region>/).
+  Multi-region (USA/EU/JP) in one binary (MULTI_REGION).
+- Picori targets 64-bit only (static assert in port/port_types.h); the Vita
+  is 32-bit ARM. The 3DS port (EstebanPdN/zelda-tmc-3ds, also 32-bit ARM,
+  from an older Picori) shows what that takes:
+  - u32/s32 as unsigned int/int: VitaSDK's newlib makes uint32_t
+    `unsigned long` (as N64's), which breaks the decomp's prototypes/enums
+    (TMC_VITA next to TMC_N64 in gba/types.h and port_types.h);
+  - the 64-bit struct paddings (`#ifdef PC_PORT` pads for pointer sizes)
+    only when `__SIZEOF_POINTER__ == 8`: 82 places taken over from the 3DS
+    port by matching their context (script), 7 more found by the layout
+    asserts, and room.c's / port_stubs.c's 64-bit-only code;
+    PORT_POINTERS_ARE_64_BIT in global.h.
+- Vita addresses (0x81000000 up) never overlap the GBA ranges
+  (0x02000000-0x0A000000) Picori maps, unlike the 3DS's.
+
+## Vita specifics (patches/picori/0001-ps-vita.patch, vita/src)
+- Data folder ux0:data/tmc: chdir there at start-up (as Picori does on
+  Android) and port::ExecutableDir() returns it.
+- Asset packs: read into memory (no mmap).
+- Speech (TTS) off, crash backtraces off (no execinfo), update check finds no
+  curl (popen stub).
+- Threads: Picori's extraction uses std::async workers and its music mixer
+  std::mutex; libstdc++ threads need pthread_cancel linked (-u) and
+  pthread-embedded initialised before libstdc++'s priority-0 constructors
+  (sms-vita saw a crash at start-up when forcing threads on without that).
+  vita_threads.cpp calls pthread_init() at priority 0 and logs whether
+  std::thread works. 1 MiB stacks for attribute-less threads.
+- printf family wrapped for %zu (VitaSDK newlib has no C99 formats).
+- Compile check without VitaSDK: clang --target=armv7a with VitaSDK headers
+  (uint32_t forced to unsigned long as in GCC): all 741 files compile.
