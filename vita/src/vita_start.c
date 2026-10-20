@@ -3,6 +3,7 @@
 #include <psp2/io/stat.h>
 #include <psp2/power.h>
 #include <SDL3/SDL_hints.h>
+#include <SDL3/SDL_log.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -18,16 +19,30 @@
 unsigned int _newlib_heap_size_user = 192u * 1024u * 1024u;
 unsigned int sceUserMainThreadStackSize = 8u * 1024u * 1024u;
 
+/* SDL's own messages (SDL_Log) into the log too */
+static void SDLCALL tmc_vita_sdl_log(void* userdata, int category, SDL_LogPriority priority, const char* message)
+{
+    (void)userdata;
+    (void)category;
+    (void)priority;
+    fprintf(stderr, "[SDL] %s\n", message);
+}
+
 __attribute__((constructor(101))) static void tmc_vita_start(void)
 {
     sceIoMkdir("ux0:data", 0777);
     sceIoMkdir(TMC_VITA_DATA_DIR, 0777); /* fails harmlessly when it exists */
 
-    /* stdout and stderr to log.txt, unbuffered, so it survives a crash */
-    if (freopen(TMC_VITA_DATA_DIR "/log.txt", "w", stderr))
-        setvbuf(stderr, NULL, _IONBF, 0);
+    /* stdout and stderr to log.txt, unbuffered, so it survives a crash.
+     * Emptied first, then both opened for appending (as sms-vita does):
+     * with stderr opened "w" only the lines written here reached the file. */
+    FILE* fresh = fopen(TMC_VITA_DATA_DIR "/log.txt", "w");
+    if (fresh)
+        fclose(fresh);
     if (freopen(TMC_VITA_DATA_DIR "/log.txt", "a", stdout))
         setvbuf(stdout, NULL, _IONBF, 0);
+    if (freopen(TMC_VITA_DATA_DIR "/log.txt", "a", stderr))
+        setvbuf(stderr, NULL, _IONBF, 0);
     fprintf(stderr, "=== The Minish Cap for PS Vita (" TMC_VITA_DATA_DIR "/log.txt) ===\n");
     fprintf(stderr, "[vita] build %s\n", TMC_VITA_COMMIT);
 
@@ -48,4 +63,6 @@ __attribute__((constructor(101))) static void tmc_vita_start(void)
      * off until the controls use it. */
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     SDL_SetHint(SDL_HINT_VITA_ENABLE_BACK_TOUCH, "0");
+    SDL_SetLogOutputFunction(tmc_vita_sdl_log, NULL);
+    fprintf(stderr, "[vita] start-up done\n");
 }
