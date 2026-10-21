@@ -125,3 +125,14 @@
   (MapLayer, which starts with a pointer) to native offsets with a fixed +4
   for the widened pointer: on 32-bit everything (mapData, collision,
   subTiles, actTiles) landed 4 bytes off. Shift is now sizeof(void*) - 4.
+
+## Speed (6d37c9d: rooms right, 25-33 fps)
+- Per frame: game ~5 ms, PPU render ~19-24 ms, rest of present ~6-14 ms
+  (incl. the VSync wait, which rounds a 30 ms frame up to 33).
+- PPU render now on three cores: the main thread (pinned to core 0) and two
+  workers (cores 1, 2) take every third scanline. The PPU's per-thread state
+  (IO override, OBJ semi-transparency and OBJ-window masks) is found through
+  TPIDRURO (VitaSDK's __thread is emulated and slow); hot loops take a local
+  pointer per line. Falls back to one thread if the threads can't be told
+  apart. PPU sources at -O3.
+- [present] line: texture upload + draw, menus/overlays, flip + VSync.

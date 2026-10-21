@@ -129,6 +129,8 @@ target_compile_options(tmc PRIVATE ${COMMON_FLAGS}
 # NaN guard is in port_m4a_backend.cpp, compiled normally).
 set_source_files_properties(${AGBPLAY_FILES} PROPERTIES COMPILE_OPTIONS
   "-O3;-funsafe-math-optimizations;-fno-math-errno")
+# The GBA picture renderer runs per pixel: full optimisation.
+set_source_files_properties(${PPU_FILES} PROPERTIES COMPILE_OPTIONS "-O3")
 
 target_link_libraries(tmc SDL3::SDL3-static png z m stdc++ pthread ScePower_stub SceKernelDmacMgr_stub)
 target_link_options(tmc PRIVATE -Wl,-q -Wl,--no-enum-size-warning)

@@ -501,6 +501,67 @@ index 23326ed..8c2a470 100644
                      continue;
                  }
  
+diff --git a/port/port_ppu.cpp b/port/port_ppu.cpp
+index b780272..cb5bf63 100644
+--- a/port/port_ppu.cpp
++++ b/port/port_ppu.cpp
+@@ -1365,6 +1365,10 @@ static bool Port_PPU_TryGpuRaster(void) {
+ }
+ #endif /* TMC_GPU_RENDERER */
+ 
++#ifdef TMC_VITA
++extern "C" unsigned long long gTmcVitaUploadNs, gTmcVitaOverlayNs, gTmcVitaFlipNs;
++#endif
++
+ extern "C" void Port_PPU_PresentFrame(void) {
+     uint16_t dispcnt;
+     uint8_t gbaMode;
+@@ -1602,6 +1606,9 @@ extern "C" void Port_PPU_PresentFrame(void) {
+     }
+ 
+     if (sBackend == RenderBackend::Renderer) {
++#ifdef TMC_VITA
++        const uint64_t tmcVitaT0 = SDL_GetTicksNS();
++#endif
+         int outW = 0;
+         int outH = 0;
+         Port_PPU_QueryOutputSize(&outW, &outH);
+@@ -1699,6 +1706,9 @@ extern "C" void Port_PPU_PresentFrame(void) {
+ 
+         Port_PPU_SetTextureScaleModeCached(tex, scale);
+         SDL_RenderTexture(sRenderer, tex, nullptr, &dst);
++#ifdef TMC_VITA
++        const uint64_t tmcVitaT1 = SDL_GetTicksNS();
++#endif
+         {
+             /* Try the ImGui-based menu first; if disabled (or init
+              * failed), fall back to the legacy SDL_RenderDebugText
+@@ -1710,6 +1720,9 @@ extern "C" void Port_PPU_PresentFrame(void) {
+             Port_SoftSlots_RenderOverlay(sRenderer, outW, outH);
+             Port_TouchControls_Render(sRenderer, outW, outH);
+         }
++#ifdef TMC_VITA
++        const uint64_t tmcVitaT2 = SDL_GetTicksNS();
++#endif
+         if (Port_PPU_PresentationCapturePath()) {
+             SDL_Surface* shot = SDL_RenderReadPixels(sRenderer, nullptr);
+             Port_PPU_CompletePresentationCapture(shot);
+@@ -1726,6 +1739,15 @@ extern "C" void Port_PPU_PresentFrame(void) {
+                 fprintf(stderr, "[ppu] SDL_RenderPresent FAILED: %s\n", SDL_GetError());
+             }
+         }
++#ifdef TMC_VITA
++        {
++            /* split of the present step for the [status] log line */
++            const uint64_t tmcVitaT3 = SDL_GetTicksNS();
++            gTmcVitaUploadNs += tmcVitaT1 - tmcVitaT0;
++            gTmcVitaOverlayNs += tmcVitaT2 - tmcVitaT1;
++            gTmcVitaFlipNs += tmcVitaT3 - tmcVitaT2;
++        }
++#endif
+         return;
+     }
+ 
 diff --git a/port/port_rom.c b/port/port_rom.c
 index f36577b..db21eaa 100644
 --- a/port/port_rom.c
@@ -667,22 +728,376 @@ index f654347..fca2506 100644
  #endif
  
 diff --git a/port/ppu/src/mode1.c b/port/ppu/src/mode1.c
-index f1022b7..5526ce5 100644
+index f1022b7..6817178 100644
 --- a/port/ppu/src/mode1.c
 +++ b/port/ppu/src/mode1.c
-@@ -341,8 +341,10 @@ void virtuappu_mode1_get_bound_gba_memory(VirtuaPPUMode1GbaMemory* memory) {
+@@ -341,7 +341,40 @@ void virtuappu_mode1_get_bound_gba_memory(VirtuaPPUMode1GbaMemory* memory) {
   * threads while still seeing the correct HDMA-mutated register state
   * (BG SCROLL, BLDY, etc.) for that scanline. NULL on the main / setup
   * thread keeps the existing single-threaded behavior intact. */
 -#ifdef TMC_N64
--/* N64: single-threaded (no OpenMP) and bare-metal (no TLS). __thread compiles to
-+#if defined(TMC_N64) || defined(TMC_VITA)
-+/* Vita: the render is single-threaded too, and __thread data isn't set up
-+ * for the Vita's executables (no TLS segment support in vita-elf-create).
-+ * N64: single-threaded (no OpenMP) and bare-metal (no TLS). __thread compiles to
++#if defined(TMC_VITA)
++/* Vita: scanlines are rendered by the main thread and two worker threads
++ * pinned to the other two user cores (see mode1_vita_* below). __thread is
++ * emulated by VitaSDK (a long call chain per access), so each render thread
++ * finds its own state through the ARM thread-ID register TPIDRURO instead:
++ * one instruction and a two-entry compare. The hot per-pixel users take a
++ * local pointer once per line. */
++#include <psp2/kernel/threadmgr.h>
++#define MODE1_VITA_THREADS 3
++typedef struct {
++    const uint8_t* io_override;
++    uint8_t obj_semitrans[MODE1_GBA_WIDTH];
++    uint8_t obj_window[MODE1_GBA_WIDTH];
++} Mode1LineCtx;
++static Mode1LineCtx mode1_line_ctx[MODE1_VITA_THREADS];
++static uintptr_t mode1_ctx_tp[MODE1_VITA_THREADS]; /* [1], [2]: the workers' TPIDRURO */
++static inline uintptr_t mode1_read_tp(void) {
++    uintptr_t v;
++    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(v));
++    return v;
++}
++static inline Mode1LineCtx* mode1_ctx(void) {
++    const uintptr_t tp = mode1_read_tp();
++    if (tp == mode1_ctx_tp[1])
++        return &mode1_line_ctx[1];
++    if (tp == mode1_ctx_tp[2])
++        return &mode1_line_ctx[2];
++    return &mode1_line_ctx[0]; /* the main thread (and anything else) */
++}
++#define virtuappu_mode1_io_thread_override (mode1_ctx()->io_override)
++#define virtuappu_mode1_obj_semitrans (mode1_ctx()->obj_semitrans)
++#define virtuappu_mode1_obj_window (mode1_ctx()->obj_window)
++#define VPPU_TLS
++#elif defined(TMC_N64)
+ /* N64: single-threaded (no OpenMP) and bare-metal (no TLS). __thread compiles to
   * RDHWR $29, which the VR4300 (MIPS III) doesn't implement -> Reserved Instruction.
   * Single-threaded rendering makes plain file-scope storage correct here. */
- #define VPPU_TLS
+@@ -349,7 +382,9 @@ void virtuappu_mode1_get_bound_gba_memory(VirtuaPPUMode1GbaMemory* memory) {
+ #else
+ #define VPPU_TLS __thread
+ #endif
++#ifndef TMC_VITA
+ VPPU_TLS const uint8_t* virtuappu_mode1_io_thread_override = NULL;
++#endif
+ 
+ /* Per-scanline scratch (one slot per screen column) marking which OBJ pixels
+  * came from a semi-transparent OBJ (attr0 mode 1). Written by render_obj_line
+@@ -357,14 +392,18 @@ VPPU_TLS const uint8_t* virtuappu_mode1_io_thread_override = NULL;
+  * GBA-accurate (a mode-1 OBJ is an unconditional blend 1st target). __thread so
+  * each OpenMP render thread, which processes a whole scanline at a time, has
+  * its own copy; render_obj_line clears it at the top of every line. */
++#ifndef TMC_VITA
+ VPPU_TLS uint8_t virtuappu_mode1_obj_semitrans[MODE1_GBA_WIDTH];
++#endif
+ 
+ /* Per-scanline OBJ-window mask (attr0 mode 2). A mode-2 OBJ is INVISIBLE on
+  * GBA — it doesn't draw colour; its opaque pixels just carve the OBJ window,
+  * inside which WINOUT's high byte (WINOBJ) selects which layers show. Written
+  * by render_obj_line, read by composite_line. __thread + cleared per line, as
+  * with obj_semitrans. */
++#ifndef TMC_VITA
+ VPPU_TLS uint8_t virtuappu_mode1_obj_window[MODE1_GBA_WIDTH];
++#endif
+ 
+ /* Per-pixel vertical OBJ clip (PC port "swamp sink"): the port marks which OAM
+  * entries to clip (one byte per OAM index) and a waterline scanline; a marked
+@@ -594,8 +633,10 @@ void virtuappu_mode1_render_obj_line(int line, bool obj_1d, uint32_t* line_buffe
+     const int mosaic_v = (int)((mosaic_reg >> 12u) & 0x0Fu) + 1;
+     int i;
+ 
+-    memset(virtuappu_mode1_obj_semitrans, 0, (size_t)mode1_frame_width);
+-    memset(virtuappu_mode1_obj_window, 0, (size_t)mode1_frame_width);
++    uint8_t* const obj_semitrans = virtuappu_mode1_obj_semitrans;
++    uint8_t* const obj_window = virtuappu_mode1_obj_window;
++    memset(obj_semitrans, 0, (size_t)mode1_frame_width);
++    memset(obj_window, 0, (size_t)mode1_frame_width);
+ 
+     for (i = MODE1_GBA_OAM_COUNT - 1; i >= 0; --i) {
+         Mode1OAMAttr attr;
+@@ -794,7 +835,7 @@ void virtuappu_mode1_render_obj_line(int line, bool obj_1d, uint32_t* line_buffe
+ 
+             if (mode1_oam_mode(attr) == 2u) {
+                 /* OBJ-window sprite: invisible, only marks the window mask. */
+-                virtuappu_mode1_obj_window[screen_x] = 1u;
++                obj_window[screen_x] = 1u;
+                 continue;
+             }
+ 
+@@ -817,7 +858,7 @@ void virtuappu_mode1_render_obj_line(int line, bool obj_1d, uint32_t* line_buffe
+             size_t pal_idx = bpp8 ? (size_t)color_index : ((size_t)mode1_oam_palette(attr) * 16u + color_index);
+             line_buffer[screen_x] = mode1_obj_abgr_lut[pal_idx];
+             priority_buffer[screen_x] = priority;
+-            virtuappu_mode1_obj_semitrans[screen_x] = (mode1_oam_mode(attr) == 1u) ? 1u : 0u;
++            obj_semitrans[screen_x] = (mode1_oam_mode(attr) == 1u) ? 1u : 0u;
+         }
+     }
+ }
+@@ -871,6 +912,8 @@ void virtuappu_mode1_composite_line(int line, uint32_t bg_layers[MODE1_GBA_BG_CO
+     int x;
+     const int frame_width = mode1_frame_width;
+     uint32_t* const out_row = &virtuappu_frame_buffer[(size_t)line * (size_t)mode1_frame_pitch];
++    const uint8_t* const obj_window_mask = virtuappu_mode1_obj_window;
++    const uint8_t* const obj_semitrans_mask = virtuappu_mode1_obj_semitrans;
+ 
+     (void)bg_priority;
+ 
+@@ -953,7 +996,7 @@ void virtuappu_mode1_composite_line(int line, uint32_t bg_layers[MODE1_GBA_BG_CO
+             /* Window priority is WIN0 > WIN1 > OBJ-window > outside, so OBJ
+              * window sits below WIN1/WIN0 (applied after this) and above the
+              * plain outside control. */
+-            if (objwin_on && virtuappu_mode1_obj_window[x]) {
++            if (objwin_on && obj_window_mask[x]) {
+                 win_ctrl = objwin_ctrl;
+             }
+             if (win1_v_active) {
+@@ -1024,7 +1067,7 @@ void virtuappu_mode1_composite_line(int line, uint32_t bg_layers[MODE1_GBA_BG_CO
+         }
+ 
+         if (allow_sfx) {
+-            if (top_layer == 4 && virtuappu_mode1_obj_semitrans[x]) {
++            if (top_layer == 4 && obj_semitrans_mask[x]) {
+                 /* Semi-transparent OBJ (attr0 mode 1): GBA forces it to be an
+                  * alpha-blend 1st target regardless of BLDCNT's effect mode and
+                  * 1st-target bits. It blends with the layer directly below when
+@@ -1415,6 +1458,156 @@ int virtuappu_mode1_prepare_frame(const PPUMemory* ppu, uint8_t* io_per_line, ui
+     return (dispcnt & MODE1_DISP_FORCED_BLANK) != 0u;
+ }
+ 
++/* One frame's render inputs, shared read-only by every render thread. */
++static struct {
++    bool affine;
++    uint16_t dispcnt;
++    bool per_line_io;
++    const uint16_t* per_line_dispcnt;
++    uint8_t (*io_snapshots)[MODE1_IO_MEM_SIZE];
++    const int32_t* aff_ref_x;
++    const int32_t* aff_ref_y;
++} mode1_job;
++
++/* One scanline: BG layers, OBJ, composite (any thread). */
++static void mode1_render_line(int line) {
++        /* Affine (mode 2) renders every scanline against the frame-start DISPCNT
++         * (GBA latches BGMODE once per frame; matches the former mode2.c). The
++         * tiled path honours per-line DISPCNT for HBlank-DMA changes. */
++        uint16_t line_dispcnt = mode1_job.affine ? mode1_job.dispcnt : mode1_job.per_line_dispcnt[line];
++        uint32_t bg_layers[MODE1_GBA_BG_COUNT][MODE1_GBA_WIDTH];
++        uint32_t obj_layer[MODE1_GBA_WIDTH];
++        uint8_t obj_priority[MODE1_GBA_WIDTH];
++        bool obj_1d = (line_dispcnt & MODE1_DISP_OBJ_1D) != 0u;
++        const uint8_t* prev_override = virtuappu_mode1_io_thread_override;
++
++        virtuappu_mode1_io_thread_override = mode1_job.per_line_io ? mode1_job.io_snapshots[line] : mode1_memory.io_mem;
++
++        memset(obj_layer, 0, (size_t)mode1_frame_width * sizeof(uint32_t));
++        memset(obj_priority, 0xFF, (size_t)mode1_frame_width);
++
++        /* Clear + render only ENABLED BGs: composite reads bg_layers[b][x] only
++         * where bg_enabled[b] (same line_dispcnt), so a disabled BG's buffer is
++         * never touched — clearing all four every line was wasted bandwidth.
++         * BG priority buffers stay NULL (composite resolves order from BGCNT). */
++        if ((line_dispcnt & MODE1_DISP_BG0_ON) != 0u) {
++            memset(bg_layers[0], 0, (size_t)mode1_frame_width * sizeof(uint32_t));
++            virtuappu_mode1_render_text_bg_line(0, line, bg_layers[0], NULL);
++        }
++        if ((line_dispcnt & MODE1_DISP_BG1_ON) != 0u) {
++            memset(bg_layers[1], 0, (size_t)mode1_frame_width * sizeof(uint32_t));
++            virtuappu_mode1_render_text_bg_line(1, line, bg_layers[1], NULL);
++        }
++        if ((line_dispcnt & MODE1_DISP_BG2_ON) != 0u) {
++            memset(bg_layers[2], 0, (size_t)mode1_frame_width * sizeof(uint32_t));
++            if (mode1_job.affine) {
++                mode1_render_affine_bg2_line(mode1_frame_width, mode1_job.aff_ref_x[line], mode1_job.aff_ref_y[line], bg_layers[2], NULL);
++            } else {
++                virtuappu_mode1_render_text_bg_line(2, line, bg_layers[2], NULL);
++            }
++        }
++        if ((line_dispcnt & MODE1_DISP_BG3_ON) != 0u) {
++            /* Mode 2 (affine) has no BG3 tile render, but if DISPCNT enables it
++             * the composite still reads bg_layers[3]; keep it cleared to 0 so it
++             * contributes nothing — exactly as the old unconditional memset did. */
++            memset(bg_layers[3], 0, (size_t)mode1_frame_width * sizeof(uint32_t));
++            if (!mode1_job.affine) {
++                virtuappu_mode1_render_text_bg_line(3, line, bg_layers[3], NULL);
++            }
++        }
++        if ((line_dispcnt & MODE1_DISP_OBJ_ON) != 0u) {
++            virtuappu_mode1_render_obj_line(line, obj_1d, obj_layer, obj_priority);
++        } else {
++            /* render_obj_line clears the per-thread obj_window / obj_semitrans
++             * masks at line start; when DISPCNT.12 (OBJ) is off they'd retain
++             * whatever scanline this WORKER THREAD rendered last — composite
++             * still reads them when OBJWIN (DISPCNT.15) is on, consuming a
++             * stale mask. Hardware: no OBJ rendering pass -> empty OBJ window. */
++            memset(virtuappu_mode1_obj_window, 0, (size_t)mode1_frame_width);
++            memset(virtuappu_mode1_obj_semitrans, 0, (size_t)mode1_frame_width);
++        }
++
++        virtuappu_mode1_composite_line(line, bg_layers, NULL, obj_layer, obj_priority, line_dispcnt);
++
++        virtuappu_mode1_io_thread_override = prev_override;
++    }
++
++#ifdef TMC_VITA
++/* Two worker threads pinned to user cores 1 and 2 render every third
++ * scanline each (lines 1, 4, 7... and 2, 5, 8...); the main thread, pinned to
++ * core 0, renders lines 0, 3, 6... Interleaving keeps the three shares even
++ * whatever the scene. Started on the first frame; if anything fails (or the
++ * threads can't be told apart by TPIDRURO) rendering stays single-threaded. */
++static SceUID mode1_vita_start_sema[MODE1_VITA_THREADS];
++static SceUID mode1_vita_done_sema[MODE1_VITA_THREADS];
++static int mode1_vita_state; /* 0 = not tried, 1 = running, -1 = off */
++
++static int mode1_vita_worker(SceSize args, void* argp) {
++    const int index = *(const int*)argp;
++    (void)args;
++    mode1_ctx_tp[index] = mode1_read_tp();
++    sceKernelSignalSema(mode1_vita_done_sema[index], 1); /* registered */
++    for (;;) {
++        sceKernelWaitSema(mode1_vita_start_sema[index], 1, NULL);
++        for (int line = index; line < MODE1_GBA_HEIGHT; line += MODE1_VITA_THREADS) {
++            mode1_render_line(line);
++        }
++        sceKernelSignalSema(mode1_vita_done_sema[index], 1);
++    }
++    return 0;
++}
++
++static void mode1_vita_start_workers(void) {
++    static const int cores[MODE1_VITA_THREADS] = { SCE_KERNEL_CPU_MASK_USER_0, SCE_KERNEL_CPU_MASK_USER_1,
++                                                   SCE_KERNEL_CPU_MASK_USER_2 };
++    mode1_vita_state = -1;
++    sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), cores[0]);
++    const uintptr_t main_tp = mode1_read_tp();
++    for (int i = 1; i < MODE1_VITA_THREADS; i++) {
++        mode1_vita_start_sema[i] = sceKernelCreateSema("ppu_start", 0, 0, 1, NULL);
++        mode1_vita_done_sema[i] = sceKernelCreateSema("ppu_done", 0, 0, 1, NULL);
++        if (mode1_vita_start_sema[i] < 0 || mode1_vita_done_sema[i] < 0) {
++            fprintf(stderr, "[ppu] render threads: semaphores failed, single-threaded\n");
++            return;
++        }
++        SceUID th = sceKernelCreateThread("ppu_worker", mode1_vita_worker, 0x10000100 /* default user priority */,
++                                          128 * 1024, 0, cores[i], NULL);
++        if (th < 0 || sceKernelStartThread(th, sizeof(int), (void*)&i) < 0) {
++            fprintf(stderr, "[ppu] render threads: thread %d failed (0x%08x), single-threaded\n", i, (unsigned)th);
++            return;
++        }
++        /* wait until it has recorded its TPIDRURO (the argument is copied
++         * by StartThread, so &i may change afterwards) */
++        sceKernelWaitSema(mode1_vita_done_sema[i], 1, NULL);
++    }
++    if (mode1_ctx_tp[1] == 0 || mode1_ctx_tp[1] == mode1_ctx_tp[2] || mode1_ctx_tp[1] == main_tp ||
++        mode1_ctx_tp[2] == main_tp) {
++        fprintf(stderr, "[ppu] render threads: TPIDRURO not distinct (%08x %08x %08x), single-threaded\n",
++                (unsigned)main_tp, (unsigned)mode1_ctx_tp[1], (unsigned)mode1_ctx_tp[2]);
++        /* the workers stay parked on their start semaphores */
++        mode1_ctx_tp[1] = mode1_ctx_tp[2] = (uintptr_t)-1;
++        return;
++    }
++    fprintf(stderr, "[ppu] render threads: 3 (cores 0-2)\n");
++    mode1_vita_state = 1;
++}
++
++/* Renders the frame on three cores; false when the workers aren't running. */
++static bool mode1_vita_render_parallel(void) {
++    if (mode1_vita_state == 0)
++        mode1_vita_start_workers();
++    if (mode1_vita_state != 1)
++        return false;
++    for (int i = 1; i < MODE1_VITA_THREADS; i++)
++        sceKernelSignalSema(mode1_vita_start_sema[i], 1);
++    for (int line = 0; line < MODE1_GBA_HEIGHT; line += MODE1_VITA_THREADS)
++        mode1_render_line(line);
++    for (int i = 1; i < MODE1_VITA_THREADS; i++)
++        sceKernelWaitSema(mode1_vita_done_sema[i], 1, NULL);
++    return true;
++}
++#endif
++
+ void virtuappu_mode1_render_frame(const PPUMemory* ppu) {
+     uint16_t dispcnt;
+     int line;
+@@ -1505,66 +1698,21 @@ void virtuappu_mode1_render_frame(const PPUMemory* ppu) {
+      * load instead of the rgb555->ABGR math. */
+     virtuappu_mode1_publish_palette_luts();
+ 
++    mode1_job.affine = affine;
++    mode1_job.dispcnt = dispcnt;
++    mode1_job.per_line_io = per_line_io;
++    mode1_job.per_line_dispcnt = per_line_dispcnt;
++    mode1_job.io_snapshots = io_snapshots;
++    mode1_job.aff_ref_x = aff_ref_x;
++    mode1_job.aff_ref_y = aff_ref_y;
++    (void)frame_width;
++#ifdef TMC_VITA
++    if (mode1_vita_render_parallel())
++        return;
++#endif
+ #pragma omp parallel for schedule(static)
+     for (line = 0; line < MODE1_GBA_HEIGHT; ++line) {
+-        /* Affine (mode 2) renders every scanline against the frame-start DISPCNT
+-         * (GBA latches BGMODE once per frame; matches the former mode2.c). The
+-         * tiled path honours per-line DISPCNT for HBlank-DMA changes. */
+-        uint16_t line_dispcnt = affine ? dispcnt : per_line_dispcnt[line];
+-        uint32_t bg_layers[MODE1_GBA_BG_COUNT][MODE1_GBA_WIDTH];
+-        uint32_t obj_layer[MODE1_GBA_WIDTH];
+-        uint8_t obj_priority[MODE1_GBA_WIDTH];
+-        bool obj_1d = (line_dispcnt & MODE1_DISP_OBJ_1D) != 0u;
+-        const uint8_t* prev_override = virtuappu_mode1_io_thread_override;
+-
+-        virtuappu_mode1_io_thread_override = per_line_io ? io_snapshots[line] : mode1_memory.io_mem;
+-
+-        memset(obj_layer, 0, (size_t)mode1_frame_width * sizeof(uint32_t));
+-        memset(obj_priority, 0xFF, (size_t)mode1_frame_width);
+-
+-        /* Clear + render only ENABLED BGs: composite reads bg_layers[b][x] only
+-         * where bg_enabled[b] (same line_dispcnt), so a disabled BG's buffer is
+-         * never touched — clearing all four every line was wasted bandwidth.
+-         * BG priority buffers stay NULL (composite resolves order from BGCNT). */
+-        if ((line_dispcnt & MODE1_DISP_BG0_ON) != 0u) {
+-            memset(bg_layers[0], 0, (size_t)mode1_frame_width * sizeof(uint32_t));
+-            virtuappu_mode1_render_text_bg_line(0, line, bg_layers[0], NULL);
+-        }
+-        if ((line_dispcnt & MODE1_DISP_BG1_ON) != 0u) {
+-            memset(bg_layers[1], 0, (size_t)mode1_frame_width * sizeof(uint32_t));
+-            virtuappu_mode1_render_text_bg_line(1, line, bg_layers[1], NULL);
+-        }
+-        if ((line_dispcnt & MODE1_DISP_BG2_ON) != 0u) {
+-            memset(bg_layers[2], 0, (size_t)mode1_frame_width * sizeof(uint32_t));
+-            if (affine) {
+-                mode1_render_affine_bg2_line(frame_width, aff_ref_x[line], aff_ref_y[line], bg_layers[2], NULL);
+-            } else {
+-                virtuappu_mode1_render_text_bg_line(2, line, bg_layers[2], NULL);
+-            }
+-        }
+-        if ((line_dispcnt & MODE1_DISP_BG3_ON) != 0u) {
+-            /* Mode 2 (affine) has no BG3 tile render, but if DISPCNT enables it
+-             * the composite still reads bg_layers[3]; keep it cleared to 0 so it
+-             * contributes nothing — exactly as the old unconditional memset did. */
+-            memset(bg_layers[3], 0, (size_t)mode1_frame_width * sizeof(uint32_t));
+-            if (!affine) {
+-                virtuappu_mode1_render_text_bg_line(3, line, bg_layers[3], NULL);
+-            }
+-        }
+-        if ((line_dispcnt & MODE1_DISP_OBJ_ON) != 0u) {
+-            virtuappu_mode1_render_obj_line(line, obj_1d, obj_layer, obj_priority);
+-        } else {
+-            /* render_obj_line clears the per-thread obj_window / obj_semitrans
+-             * masks at line start; when DISPCNT.12 (OBJ) is off they'd retain
+-             * whatever scanline this WORKER THREAD rendered last — composite
+-             * still reads them when OBJWIN (DISPCNT.15) is on, consuming a
+-             * stale mask. Hardware: no OBJ rendering pass -> empty OBJ window. */
+-            memset(virtuappu_mode1_obj_window, 0, (size_t)mode1_frame_width);
+-            memset(virtuappu_mode1_obj_semitrans, 0, (size_t)mode1_frame_width);
+-        }
+-
+-        virtuappu_mode1_composite_line(line, bg_layers, NULL, obj_layer, obj_priority, line_dispcnt);
+-
+-        virtuappu_mode1_io_thread_override = prev_override;
++        mode1_render_line(line);
+     }
+ }
++
 diff --git a/src/collision.c b/src/collision.c
 index 7b181b8..ebc0366 100644
 --- a/src/collision.c
