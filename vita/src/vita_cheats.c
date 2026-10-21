@@ -157,8 +157,17 @@ static Uint64 sKeyboardClosedMs;
 static Uint64 sKeyboardHiddenSinceMs;
 static SDL_Window* sKeyboardWindow;
 
+/* Also while waiting: an empty name sends no text, only that Enter, which
+ * then reached the menu (reopening the keyboard and pressing whatever else
+ * had focus). */
 bool TmcVita_SwallowKey(int scancode) {
-    return scancode == SDL_SCANCODE_RETURN && sKeyboardClosedMs != 0 && SDL_GetTicks() - sKeyboardClosedMs < 500;
+    if (scancode != SDL_SCANCODE_RETURN)
+        return false;
+    if (sWaitingName) {
+        sKeyboardClosedMs = SDL_GetTicks(); /* the keyboard is closing */
+        return true;
+    }
+    return sKeyboardClosedMs != 0 && SDL_GetTicks() - sKeyboardClosedMs < 500;
 }
 
 static void PollKeyboardClosed(void);
