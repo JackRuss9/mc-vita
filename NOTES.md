@@ -61,3 +61,9 @@
   post-process) and a 2048-frame buffer by default.
 - Title screen pillarboxed to 3:2 with the "blurred" side fill (Picori's
   default bg_fill); true widescreen only in gameplay (TASK_GAME).
+- Start on the title screen crashed (MemFill32 <- sub_0805F5CC <- ShowTextBox
+  <- DrawFileSelectSettingsHint): Port_IsFontGBAEncoded sniffs a GBA blob by
+  word 1 (gfx_dest) being a GBA address, which a native Font with a VRAM
+  gfx_dest also is on 32-bit; Port_DecodeFontGBA then turned its native
+  pointers into NULL. On 32-bit both layouts match: field-by-field resolve
+  only (text.c), with 0x02000D00 -> gTextGfxBuffer as the decoder does.

@@ -1448,3 +1448,40 @@ index 625b548..ad41434 100644
          /* GenericEntity's cutsceneBeh/field_0x86 union is void*-aligned,
           * so it sits at PC offset 0xB0/0xB2 — but most entity subclass
           * structs (WarpPointEntity, HeartContainerEntity, GentariCurtain,
+diff --git a/src/text.c b/src/text.c
+index 9e56966..58e30a6 100644
+--- a/src/text.c
++++ b/src/text.c
+@@ -608,9 +608,16 @@ u32 ShowTextBox(uintptr_t textIndexOrPtr, const Font* paramFont) {
+ #ifdef PC_PORT
+         /* Many callers pass 24-byte GBA Font blobs (raw ROM data with 32-bit pointers).
+          * On 64-bit, the C Font struct has 8-byte pointers — detect and decode. */
++#if PORT_POINTERS_ARE_64_BIT
+         if (Port_IsFontGBAEncoded(paramFont)) {
+             Port_DecodeFontGBA(paramFont, &font);
+-        } else {
++        } else
++#endif
++        /* 32-bit: a native Font and a GBA blob have the same layout (and the
++         * sniff above mistakes native Fonts whose gfx_dest is a VRAM address
++         * for GBA blobs), so both take this path; GBA-range pointers are
++         * resolved field by field. */
++        {
+             MemCopy(paramFont, &font, sizeof(Font));
+             /* Native Font structs in figurineMenu.c (gUnk_0812816C / gUnk_08128190)
+              * carry GBA EWRAM/VRAM addresses verbatim in their pointer fields
+@@ -624,6 +631,14 @@ u32 ShowTextBox(uintptr_t textIndexOrPtr, const Font* paramFont) {
+             if ((uintptr_t)font.gfx_dest >= 0x02000000u && (uintptr_t)font.gfx_dest < 0x0A000000u) {
+                 font.gfx_dest = port_resolve_addr((uintptr_t)font.gfx_dest);
+             }
++#if !PORT_POINTERS_ARE_64_BIT
++            /* gTextGfxBuffer is its own array here, not inside gEwram (as
++             * Port_DecodeFontGBA does it) */
++            if ((uintptr_t)font.buffer_loc == 0x02000D00u) {
++                extern u8 gTextGfxBuffer[];
++                font.buffer_loc = gTextGfxBuffer;
++            } else
++#endif
+             if ((uintptr_t)font.buffer_loc >= 0x02000000u && (uintptr_t)font.buffer_loc < 0x0A000000u) {
+                 font.buffer_loc = port_resolve_addr((uintptr_t)font.buffer_loc);
+             }
