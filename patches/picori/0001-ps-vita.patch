@@ -52,6 +52,95 @@ index aeacb72..61719c1 100644
  #define PORT_STATIC_ASSERT_SIZE(type, gba_size, pc_size, msg) static_assert(sizeof(type) == (gba_size), msg)
  #define PORT_STATIC_ASSERT_EXPR(expr, gba_size, pc_size, msg) static_assert((expr) == (gba_size), msg)
  #define PORT_STATIC_ASSERT_OFFSET(type, field, gba_off, pc_off, msg) static_assert(offsetof(type, field) == (gba_off), msg)
+diff --git a/libs/agbplay_core/MP2KTrack.hpp b/libs/agbplay_core/MP2KTrack.hpp
+index c99c67b..dc9bdc7 100644
+--- a/libs/agbplay_core/MP2KTrack.hpp
++++ b/libs/agbplay_core/MP2KTrack.hpp
+@@ -37,6 +37,11 @@ struct MP2KTrack {
+     VoiceFlags activeVoiceTypes;
+     std::vector<sample> audioBuffer;
+     std::unique_ptr<ReverbEffect> reverb;
++    /* Vita port: a track no channel wrote to this buffer (and whose reverb
++     * tail has run out) holds silence and is skipped by the mixer stages;
++     * see SoundMixer::Process. */
++    bool active = true;
++    uint32_t reverbTail = 0;
+     LoudnessCalculator loudnessCalculator;
+ 
+     size_t pos;
+diff --git a/libs/agbplay_core/SoundMixer.cpp b/libs/agbplay_core/SoundMixer.cpp
+index 47642d7..baf58e7 100644
+--- a/libs/agbplay_core/SoundMixer.cpp
++++ b/libs/agbplay_core/SoundMixer.cpp
+@@ -56,10 +56,19 @@ void SoundMixer::Process()
+     ctx.masterAudioBuffer.resize(samplesPerBuffer);
+     std::fill(ctx.masterAudioBuffer.begin(), ctx.masterAudioBuffer.end(), sample{0.0f, 0.0f});
+ 
++    /* Only tracks that held sound need clearing: an inactive track's buffer
++     * is already silent. Most of the 32 players' tracks are idle at any time,
++     * and processing every one of them each buffer was most of the synth's
++     * cost on the Vita. */
+     for (MP2KPlayer &player : ctx.players) {
+         for (MP2KTrack &trk : player.tracks) {
+-            trk.audioBuffer.resize(samplesPerBuffer);
+-            std::fill(trk.audioBuffer.begin(), trk.audioBuffer.end(), sample{0.0f, 0.0f});
++            if (trk.audioBuffer.size() != samplesPerBuffer) {
++                trk.audioBuffer.resize(samplesPerBuffer);
++                std::fill(trk.audioBuffer.begin(), trk.audioBuffer.end(), sample{0.0f, 0.0f});
++            } else if (trk.active) {
++                std::fill(trk.audioBuffer.begin(), trk.audioBuffer.end(), sample{0.0f, 0.0f});
++            }
++            trk.active = false;
+         }
+     }
+ 
+@@ -72,8 +81,10 @@ void SoundMixer::Process()
+ 
+     /* 3. mix channels which are affected by reverb (PCM only) */
+     auto mixFunc = [&](auto &channels) {
+-        for (auto &chn : channels)
++        for (auto &chn : channels) {
++            chn.trackOrg->active = true;
+             chn.Process(chn.trackOrg->audioBuffer, margs);
++        }
+     };
+     mixFunc(ctx.sndChannels);
+ 
+@@ -81,6 +92,16 @@ void SoundMixer::Process()
+     // TODO add player for-loop for multiple players
+     for (MP2KPlayer &player : ctx.players) {
+         for (MP2KTrack &trk : player.tracks) {
++            /* keep running the reverb ~2 s after the track's last sound so
++             * its tail decays (and its ring buffer ends up silent) */
++            if (trk.active) {
++                trk.reverbTail = 120;
++            } else if (trk.reverbTail > 0) {
++                trk.reverbTail--;
++                trk.active = true;
++            } else {
++                continue;
++            }
+             trk.reverb->Process(trk.audioBuffer);
+         }
+     }
+@@ -120,6 +141,8 @@ void SoundMixer::Process()
+ 
+     for (MP2KPlayer &player : ctx.players) {
+         for (MP2KTrack &trk : player.tracks) {
++            if (!trk.active)
++                continue;
+             const float masterStep = (masterTo - masterFrom) * margs.samplesPerBufferInv;
+             float masterLevel = masterFrom;
+             for (size_t i = 0; i < samplesPerBuffer; i++) {
+@@ -134,7 +157,7 @@ void SoundMixer::Process()
+     /* 8. master mixdown */
+     for (MP2KPlayer &player : ctx.players) {
+         for (MP2KTrack &trk : player.tracks) {
+-            if (trk.muted)
++            if (trk.muted || !trk.active)
+                 continue;
+ 
+             assert(ctx.masterAudioBuffer.size() == trk.audioBuffer.size());
 diff --git a/port/port_asset_pak_loader.cpp b/port/port_asset_pak_loader.cpp
 index 307540f..6715a7d 100644
 --- a/port/port_asset_pak_loader.cpp
@@ -106,10 +195,25 @@ index 307540f..6715a7d 100644
      int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
      if (fd < 0) {
 diff --git a/port/port_audio.c b/port/port_audio.c
-index b18768c..a961149 100644
+index b18768c..07c265f 100644
 --- a/port/port_audio.c
 +++ b/port/port_audio.c
-@@ -22,7 +22,11 @@ static SDL_AudioStream* sAudioStream;
+@@ -8,7 +8,14 @@
+ #include <math.h>
+ 
+ enum {
++#ifdef TMC_VITA
++    /* The agbplay synth's cost scales with the output rate; at 48 kHz it took
++     * ~2x real time on the Vita. 32 kHz is still well above the rate the
++     * GBA itself mixed at. */
++    PORT_AUDIO_SAMPLE_RATE = 32000,
++#else
+     PORT_AUDIO_SAMPLE_RATE = 48000,
++#endif
+     PORT_AUDIO_CHANNELS = 2,
+     PORT_AUDIO_BYTES_PER_FRAME = sizeof(int16_t) * PORT_AUDIO_CHANNELS,
+ };
+@@ -22,7 +29,11 @@ static SDL_AudioStream* sAudioStream;
   * false→true edge (see Port_Audio_SetGbaAccurate), there is a happens-before
   * edge guaranteeing the audio thread has already observed accurate==true and
   * stopped touching the filter statics. */
@@ -121,7 +225,7 @@ index b18768c..a961149 100644
  
  /* Mid/side widen gain for post-process stage 2 (F8 → Audio "Stereo width").
   * Default 1.20 = the long-standing shipped image. Written on the main thread,
-@@ -156,7 +160,11 @@ static void Port_Audio_Feed(void* userdata, SDL_AudioStream* stream, int additio
+@@ -156,7 +167,11 @@ static void Port_Audio_Feed(void* userdata, SDL_AudioStream* stream, int additio
      int remaining = additional_amount;
      (void)userdata;
      (void)total_amount;
@@ -133,22 +237,34 @@ index b18768c..a961149 100644
      /* Trace statics (see below); also used to report render work-time. */
      static Uint64 sLastCbNs = 0, sWindowNs = 0;
      static double sMaxGap = 0.0, sReqMs = 0.0, sMaxWorkMs = 0.0, sSumWorkMs = 0.0;
-@@ -284,6 +292,10 @@ bool Port_Audio_Init(void) {
-             fclose(mf);
-         }
+@@ -316,6 +331,11 @@ bool Port_Audio_Init(void) {
      }
+ #endif
+ 
 +#ifdef TMC_VITA
-+    if (frames == 0)
-+        frames = 2048; /* ~43 ms: slack for the Vita's slower cores */
++    /* 1024 frames at 32 kHz (~32 ms), on the Vita's BGM port (SDL opens that
++     * one for rates below 48 kHz, so there's no resampling). */
++    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "1024");
 +#endif
-     if (frames == 0) {
-         /* No override: pick a default from the CPU's top clock. Read the highest
-          * cpuinfo_max_freq across cores; a weak in-order-class cluster (< 1.8 GHz)
+     sAudioStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, Port_Audio_Feed, NULL);
+     if (sAudioStream == NULL) {
+         SDL_Log("Port_Audio_Init: SDL_OpenAudioDeviceStream failed: %s", SDL_GetError());
 diff --git a/port/port_bios.c b/port/port_bios.c
-index a1cd2a9..5772bc9 100644
+index a1cd2a9..d64989b 100644
 --- a/port/port_bios.c
 +++ b/port/port_bios.c
-@@ -721,6 +721,9 @@ static void Port_ProfileReportMaybe(void) {
+@@ -656,6 +656,10 @@ static bool Port_PacingForceLegacy(void) {
+          * they need the one-rasterization-per-tick coupling. Pin them to the
+          * legacy loop so their outputs stay comparable across versions.
+          * TMC_LEGACY_PACING is the manual escape hatch. */
++#ifdef TMC_VITA
++        f = 1; /* one present per tick, paced by VSync (see NOTES.md) */
++        return true;
++#endif
+         f = (getenv("TMC_CAPTURE_FRAME") || getenv("TMC_PERFCAP") || getenv("TMC_ROOMCAP") ||
+              getenv("TMC_LEGACY_PACING"))
+                 ? 1
+@@ -721,6 +725,9 @@ static void Port_ProfileReportMaybe(void) {
  
  int Port_Profile_Enabled(void) {
      static int en = -1;
@@ -215,7 +331,7 @@ index b2e70e1..11efc7f 100644
      } else {
          ImGui::TextDisabled("Glitch tricks are selectable when Glitchless logic is OFF.");
 diff --git a/port/port_m4a_backend.cpp b/port/port_m4a_backend.cpp
-index 23326ed..430dac0 100644
+index 23326ed..9693e8c 100644
 --- a/port/port_m4a_backend.cpp
 +++ b/port/port_m4a_backend.cpp
 @@ -102,7 +102,11 @@ struct BackendState {
@@ -230,6 +346,15 @@ index 23326ed..430dac0 100644
      /* Forced PCM-reverb level byte (F8 → Audio "Reverb"). 0x00 = OFF (dry —
       * ships unchanged). When enabled it is (0x80 | level), level 1..0x7F; the
       * 0x80 REV_MASK_SET bit is what actually engages SoundMixer::GetReverbLevel
+@@ -650,7 +654,7 @@ static void RenderChunkLocked(void) {
+                 const auto& track = player.tracks[trackIndex];
+                 const float gain = static_cast<float>(sState.trackVolumes[playerIndex][trackIndex]) / 255.0f;
+ 
+-                if (track.muted || gain <= 0.0f) {
++                if (track.muted || !track.active || gain <= 0.0f) {
+                     continue;
+                 }
+ 
 diff --git a/port/port_rom.c b/port/port_rom.c
 index f36577b..f0e618f 100644
 --- a/port/port_rom.c
@@ -267,6 +392,23 @@ index f36577b..f0e618f 100644
  
      /* ROM header (for game code verification) */
      ExtractRegion(0, 0x200);
+diff --git a/port/port_rom.h b/port/port_rom.h
+index 40989b9..bc3c267 100644
+--- a/port/port_rom.h
++++ b/port/port_rom.h
+@@ -40,7 +40,11 @@ extern u8* gMapData;
+  */
+ static inline int Port_IsValidHostPtr(const void* p) {
+     uintptr_t a = (uintptr_t)p;
+-#if defined(_WIN32)
++#if __SIZEOF_POINTER__ == 4
++    /* 32-bit (Vita: user memory from 0x81000000): reject NULL, low garbage,
++     * raw GBA addresses (< 0x10000000) and small negatives. */
++    return a >= 0x10000000u && a < 0xFFFF0000u;
++#elif defined(_WIN32)
+     return a >= 0x10000ULL && a < 0x800000000000ULL;
+ #else
+     return a > 0xFFFFFFFFULL && a < 0x1000000000000ULL;
 diff --git a/port/port_stubs.c b/port/port_stubs.c
 index b20c88d..b7f3b1c 100644
 --- a/port/port_stubs.c
@@ -331,6 +473,45 @@ index f654347..fca2506 100644
 +#if !defined(TMC_N64) && !defined(TMC_VITA)
  PORT_STATIC_ASSERT(sizeof(void*) == 8, "PC port targets 64-bit systems only");
  #endif
+ 
+diff --git a/src/collision.c b/src/collision.c
+index 7b181b8..ebc0366 100644
+--- a/src/collision.c
++++ b/src/collision.c
+@@ -201,7 +201,13 @@ bool32 IsColliding(Entity* this, Entity* that) {
+         {
+             uintptr_t pa = (uintptr_t)bb_this;
+             uintptr_t pb = (uintptr_t)bb_that;
+-#if defined(_WIN32)
++#if __SIZEOF_POINTER__ == 4
++            /* 32-bit (Vita): every host pointer is below 4 GiB. Reject NULL,
++             * low garbage and raw GBA addresses (< 0x10000000) and small
++             * negatives; keep in sync with Port_IsValidHostPtr. */
++            int pa_bad = pa < 0x10000000u || pa >= 0xFFFF0000u;
++            int pb_bad = pb < 0x10000000u || pb >= 0xFFFF0000u;
++#elif defined(_WIN32)
+             /* Windows / Wine: user-mode pointers are in the low ~128 TB
+              * (heap typically 0x000001XX_XXXXXXXX, exe/DLL 0x00007FFE_...).
+              * The Linux check below would reject *every* valid Windows
+diff --git a/src/cutscene.c b/src/cutscene.c
+index 17633ee..1d953cc 100644
+--- a/src/cutscene.c
++++ b/src/cutscene.c
+@@ -175,6 +175,15 @@ void (*const gUnk_080FCCFC[])(void) = {
+ };
+ 
+ void sub_080536D4(void) {
++#ifdef TMC_VITA
++    /* Start skips the opening storybook (the Picori legend pages, states
++     * 1-10): straight to its end, fading out as the last page does. */
++    if ((gInput.newKeys & START_BUTTON) && gMenu.overlayType >= 1 && gMenu.overlayType <= 10) {
++        gMenu.overlayType = 11;
++        SetFade(FADE_IN_OUT | FADE_INSTANT, 8);
++        return;
++    }
++#endif
+     gUnk_080FCCFC[gMenu.overlayType]();
+ }
  
 diff --git a/src/enemy/armos.c b/src/enemy/armos.c
 index a373017..d906de3 100644

@@ -67,3 +67,20 @@
   gfx_dest also is on 32-bit; Port_DecodeFontGBA then turned its native
   pointers into NULL. On 32-bit both layouts match: field-by-field resolve
   only (text.c), with 0x02000D00 -> gTextGfxBuffer as the decoder does.
+
+## Second play (e2f4370)
+- Start-up much faster without rom_data.
+- [profile]: game tick ~5 ms, present ~4 ms, yet only 15-27 presents per 120
+  ticks: the decoupled pacer's cost check held presents back (~10 fps on
+  screen). Vita: legacy coupled loop, one present per tick paced by VSync.
+- [audio]: synth work 35-48 ms per 21 ms buffer once music plays (~2x real
+  time) -> crackle. Now 32 kHz output (BGM port, no resampling), agbplay
+  at -O3 with vectorisable float maths, and idle tracks skipped (only tracks
+  a channel wrote to, or with a reverb tail, are cleared/reverbed/mixed;
+  the port's own mixdown skips them too).
+- Port_IsValidHostPtr and IsColliding's guard accepted only pointers above
+  4 GiB: on 32-bit every host pointer failed (animations, NPC interaction,
+  collision). 32-bit: >= 0x10000000 and below 0xFFFF0000.
+- Start skips the opening storybook (cutscene.c, states 1-10 -> 11).
+- Open: black screen in gameplay after the story (game running: autosaves,
+  area changes); visual glitches on the file select and story pages.

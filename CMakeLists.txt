@@ -124,6 +124,12 @@ set(COMMON_FLAGS -O2 -g -fno-short-enums -fno-strict-aliasing -fwrapv -fno-stric
 target_compile_options(tmc PRIVATE ${COMMON_FLAGS}
   $<$<COMPILE_LANGUAGE:C>:-std=gnu11> $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++20>)
 
+# The music synth (agbplay) is the heaviest code on the Vita: full
+# optimisation, and float maths the compiler may vectorise with NEON (its
+# NaN guard is in port_m4a_backend.cpp, compiled normally).
+set_source_files_properties(${AGBPLAY_FILES} PROPERTIES COMPILE_OPTIONS
+  "-O3;-funsafe-math-optimizations;-fno-math-errno")
+
 target_link_libraries(tmc SDL3::SDL3-static png z m stdc++ pthread ScePower_stub SceKernelDmacMgr_stub)
 target_link_options(tmc PRIVATE -Wl,-q -Wl,--no-enum-size-warning)
 # libstdc++'s threads on (vita/src/vita_threads.cpp): the symbol it checks for,
