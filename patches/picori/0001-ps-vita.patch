@@ -222,10 +222,38 @@ index b18768c..1f8c94c 100644
      if (sAudioStream == NULL) {
          SDL_Log("Port_Audio_Init: SDL_OpenAudioDeviceStream failed: %s", SDL_GetError());
 diff --git a/port/port_bios.c b/port/port_bios.c
-index a1cd2a9..aacf868 100644
+index a1cd2a9..1a8761c 100644
 --- a/port/port_bios.c
 +++ b/port/port_bios.c
-@@ -656,6 +656,10 @@ static bool Port_PacingForceLegacy(void) {
+@@ -471,6 +471,27 @@ static void Port_PumpEvents(void) {
+          * on both up and down edges so a release-and-re-press re-arms.
+          * The toggle fires once on the down-edge of whichever button
+          * completes the pair. */
++#ifdef TMC_VITA
++        /* Vita: L+R opens/closes the settings menu (Select+Start is awkward
++         * on the Vita). Both shoulders must go down within 200 ms of each
++         * other, so holding R (to pull or carry something) and later
++         * pressing L for a Kinstone doesn't open it. */
++        if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && (e.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER ||
++                                                        e.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) {
++            static Uint64 s_l_down_ms = 0, s_r_down_ms = 0;
++            const Uint64 now_ms = SDL_GetTicks();
++            if (e.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)
++                s_l_down_ms = now_ms;
++            else
++                s_r_down_ms = now_ms;
++            if (s_l_down_ms && s_r_down_ms &&
++                (s_l_down_ms > s_r_down_ms ? s_l_down_ms - s_r_down_ms : s_r_down_ms - s_l_down_ms) <= 200) {
++                extern void Port_DebugMenu_Toggle(void);
++                Port_DebugMenu_Toggle();
++                s_l_down_ms = s_r_down_ms = 0;
++            }
++        }
++#endif
+         {
+             static bool s_select_held = false, s_start_held = false;
+             const bool is_down = (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
+@@ -656,6 +677,10 @@ static bool Port_PacingForceLegacy(void) {
           * they need the one-rasterization-per-tick coupling. Pin them to the
           * legacy loop so their outputs stay comparable across versions.
           * TMC_LEGACY_PACING is the manual escape hatch. */
@@ -236,7 +264,7 @@ index a1cd2a9..aacf868 100644
          f = (getenv("TMC_CAPTURE_FRAME") || getenv("TMC_PERFCAP") || getenv("TMC_ROOMCAP") ||
               getenv("TMC_LEGACY_PACING"))
                  ? 1
-@@ -706,6 +710,12 @@ static void Port_ProfileReportMaybe(void) {
+@@ -706,6 +731,12 @@ static void Port_ProfileReportMaybe(void) {
          double total = game + present;
          double maxGame = sProfMaxGameNs / 1e6;
          double maxPresent = sProfMaxPresentNs / 1e6;
@@ -249,7 +277,7 @@ index a1cd2a9..aacf868 100644
          fprintf(stderr,
                  "[profile] %u frames: game=%.3f present=%.3f (render=%.3f) ms | "
                  "%.0f fps uncapped | worst: game=%.2f present=%.2f ms | presents=%u\n",
-@@ -721,6 +731,9 @@ static void Port_ProfileReportMaybe(void) {
+@@ -721,6 +752,9 @@ static void Port_ProfileReportMaybe(void) {
  
  int Port_Profile_Enabled(void) {
      static int en = -1;
@@ -259,6 +287,84 @@ index a1cd2a9..aacf868 100644
      if (en < 0) {
          const char* e = getenv("TMC_PROFILE");
          if (e && *e && e[0] != '0') {
+diff --git a/port/port_draw.c b/port/port_draw.c
+index 630d56d..4580be4 100644
+--- a/port/port_draw.c
++++ b/port/port_draw.c
+@@ -170,6 +170,12 @@ static int sEntitiesUpdated = 0;
+ static jmp_buf sEntityUpdateJmpBuf;
+ static int sEntityUpdateJmpBufValid = 0;
+ 
++#ifdef TMC_VITA
++/* bring-up counters, read and reset by TmcVita_LogStatus (vita/src) */
++int gTmcVitaDbgUpdated, gTmcVitaDbgDrawCalls, gTmcVitaDbgDrawListed, gTmcVitaDbgOamMax, gTmcVitaDbgFrameMiss,
++    gTmcVitaDbgPieces;
++#endif
++
+ void ram_UpdateEntities(u32 mode) {
+     sUpdateEntitiesCalls++;
+ 
+@@ -254,6 +260,9 @@ void ram_UpdateEntities(u32 mode) {
+             u8 kind = entity->kind;
+ 
+             sEntitiesUpdated++;
++#ifdef TMC_VITA
++            gTmcVitaDbgUpdated++;
++#endif
+ 
+             if (kind < 10) {
+ 
+@@ -498,6 +507,9 @@ static void RenderSpritePieces(const u8* data, /* pointer to frame data (count b
+ 
+         memcpy(ip, &oamWord, sizeof(oamWord));
+         ip += 4;
++#ifdef TMC_VITA
++        gTmcVitaDbgPieces++;
++#endif
+ 
+         /* Build attr2: tile number + priority + palette */
+         u16 attr2 = (u16)tileLow + extra;
+@@ -674,6 +686,9 @@ extern u16 gUnk_02021F20[8];
+ 
+ void DrawEntity(Entity* entity) {
+     u8 draw = *(u8*)&entity->spriteSettings & 3; /* bits 0-1 */
++#ifdef TMC_VITA
++    gTmcVitaDbgDrawCalls++;
++#endif
+     if (draw == 0) {
+         gUnk_02024048 = 0;
+         return;
+@@ -700,6 +715,9 @@ void DrawEntity(Entity* entity) {
+     if (list->count < 64) {
+         list->entries[list->count] = entity;
+         list->count++;
++#ifdef TMC_VITA
++        gTmcVitaDbgDrawListed++;
++#endif
+     }
+ 
+     /* Flush pending SFX queue (matches the original DrawEntity behavior). */
+@@ -819,6 +837,9 @@ static void LookupAndRenderNormal(Entity* entity, s32 x, s32 y, u32 flags, u16 e
+     u16 sprIdx = (u16)entity->spriteIndex;
+     const u8* frameData = LookupFrameData(sprIdx, frameIdx);
+     if (!frameData) {
++#ifdef TMC_VITA
++        gTmcVitaDbgFrameMiss++;
++#endif
+         return;
+     }
+ 
+@@ -1194,6 +1215,10 @@ void ram_DrawEntities(void) {
+         sVoxelCtx.kind = PORT_VOXEL_OAM_DECAL;
+         ProcessDeferredList();
+         sVoxelCtx.kind = PORT_VOXEL_OAM_HUD;
++#ifdef TMC_VITA
++        if (gOAMControls.updated > gTmcVitaDbgOamMax)
++            gTmcVitaDbgOamMax = gOAMControls.updated;
++#endif
+ 
+         /* NOTE: do NOT clear list->count here. The list is cleared at
+          * the start of ram_UpdateEntities (mode=0) so registrations
 diff --git a/port/port_exe_path.cpp b/port/port_exe_path.cpp
 index 74dd4d8..719113e 100644
 --- a/port/port_exe_path.cpp
@@ -297,7 +403,7 @@ index 0fd1133..f2d6c10 100644
  #define PORT_HAVE_EXECINFO 1
  #else
 diff --git a/port/port_imgui_menu.cpp b/port/port_imgui_menu.cpp
-index 7faa3cf..b2c1e73 100644
+index 7faa3cf..b20ec5d 100644
 --- a/port/port_imgui_menu.cpp
 +++ b/port/port_imgui_menu.cpp
 @@ -729,7 +729,11 @@ static void DrawRibbon(void) {
@@ -305,7 +411,7 @@ index 7faa3cf..b2c1e73 100644
          }
          ImGui::SameLine();
 +#ifdef TMC_VITA
-+        ImGui::TextDisabled("(Select+Start also toggles)");
++        ImGui::TextDisabled("(L+R or Select+Start also toggles)");
 +#else
          ImGui::TextDisabled("(F8 or Select+Start also toggles)");
 +#endif
@@ -317,7 +423,7 @@ index 7faa3cf..b2c1e73 100644
           * shape (the default ImGui font doesn't ship U+2261 ≡). First run:
           * spelled-out "Settings (F8)". Open: clear close label. */
 +#ifdef TMC_VITA
-+        const char* label = open ? " CLOSE MENU " : (showHint ? " Settings  (SELECT+START) " : "[=]");
++        const char* label = open ? " CLOSE MENU (L+R) " : (showHint ? " Settings  (L+R) " : "L+R");
 +#else
          const char* label = open ? " CLOSE MENU " : (showHint ? " Settings  (F8) " : "[=]");
 +#endif

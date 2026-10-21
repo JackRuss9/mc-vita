@@ -8,12 +8,16 @@
 #include "main.h"
 #include "menu.h"
 #include "structures.h"
+#include "entity.h"
 
 #include <stdio.h>
 
 extern u8 gIoMem[0x400];
 extern u16 gOamMem[0x400 / 2];
 extern int Port_PPU_VisibleFrameWidth(void);
+extern int gTmcVitaDbgUpdated, gTmcVitaDbgDrawCalls, gTmcVitaDbgDrawListed, gTmcVitaDbgOamMax, gTmcVitaDbgFrameMiss,
+    gTmcVitaDbgPieces;
+extern LinkedList gEntityLists[9];
 
 static unsigned io16(unsigned off)
 {
@@ -28,6 +32,25 @@ void TmcVita_LogStatus(void)
         if (((gOamMem[i * 4] >> 8) & 3) != 2)
             visible++;
     }
+    /* entities per list (0-7 entities, 8 managers) */
+    char lists[64];
+    int n = 0;
+    for (int l = 0; l < 9; l++) {
+        int count = 0;
+        Entity* e = gEntityLists[l].first;
+        while (e != NULL && e != (Entity*)&gEntityLists[l] && count < 999) {
+            count++;
+            e = e->next;
+        }
+        n += snprintf(lists + n, sizeof lists - (size_t)n, "%s%d", l ? "," : "", count);
+    }
+    fprintf(stderr,
+            "[entities] lists=%s | per 120 frames: updated=%d DrawEntity=%d listed=%d frame-miss=%d pieces=%d "
+            "oam-max=%d\n",
+            lists, gTmcVitaDbgUpdated, gTmcVitaDbgDrawCalls, gTmcVitaDbgDrawListed, gTmcVitaDbgFrameMiss,
+            gTmcVitaDbgPieces, gTmcVitaDbgOamMax);
+    gTmcVitaDbgUpdated = gTmcVitaDbgDrawCalls = gTmcVitaDbgDrawListed = gTmcVitaDbgFrameMiss = 0;
+    gTmcVitaDbgPieces = gTmcVitaDbgOamMax = 0;
     fprintf(stderr,
             "[status] task=%u state=%u sub=%u overlay=%u | fade active=%u type=%04x progress=%u color=%u | "
             "DISPCNT=%04x(%04x) BLDCNT=%04x BLDY=%04x WIN0H=%04x WININ=%04x WINOUT=%04x | "

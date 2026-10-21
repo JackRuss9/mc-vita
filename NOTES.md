@@ -98,3 +98,12 @@
   registers, visible OAM count.
 - Settings button label: Select+Start (already Picori's gamepad toggle).
 - bg_fill default black on the Vita.
+
+## Fourth play (b5d627f)
+- [status]: file select has 0 visible OAM entries; after the story the game
+  sits in the storybook's state 12 (nullsub, waiting for the entities it
+  loaded to move it on) with no fade, BG0-2+OBJ on, width 282: black, and
+  no sprites anywhere. Suspect: entities not running/drawing at all.
+  [entities] line added: entity list lengths, updates, DrawEntity calls,
+  draw-list entries, frame lookups that failed, OAM pieces built.
+- Settings: L+R (both within 200 ms) on the Vita; label "L+R".
