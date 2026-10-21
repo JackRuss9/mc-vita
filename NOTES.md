@@ -166,3 +166,10 @@
   SDL_StartTextInput; the text event is taken in port_bios.c's event loop).
 - Slow spots (40-48 fps): dungeon rooms with colour effects (composite slow
   path, render ~10 ms) and HD dialogue text boxes (ImGui ~5-7 ms).
+- "Unlock all items" after renames (log of 79ff5a4): the keyboard's Enter
+  reached Port_DebugMenu_HandleKey (legacy page cursor -> Items -> "Unlock
+  all items") because the swallow compared e.key.scancode: SDL_Scancode is
+  an enum, 2 bytes in SDL (short enums) but 4 in our view (-fno-short-enums),
+  so the read included 2 bytes of padding and matched only sometimes. Compare
+  e.key.key (SDL_Keycode, a Uint32) instead. Rule: never read SDL enum-typed
+  event fields in our code; use the plain integer ones.

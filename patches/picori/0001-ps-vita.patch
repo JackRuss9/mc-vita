@@ -249,10 +249,10 @@ index b18768c..2ab0b74 100644
      if (sAudioStream == NULL) {
          SDL_Log("Port_Audio_Init: SDL_OpenAudioDeviceStream failed: %s", SDL_GetError());
 diff --git a/port/port_bios.c b/port/port_bios.c
-index a1cd2a9..5967ff7 100644
+index a1cd2a9..fe43f23 100644
 --- a/port/port_bios.c
 +++ b/port/port_bios.c
-@@ -224,6 +224,37 @@ static void Port_UpdateInput(void) {
+@@ -224,6 +224,41 @@ static void Port_UpdateInput(void) {
  static void Port_PumpEvents(void) {
      SDL_Event e;
      while (SDL_PollEvent(&e)) {
@@ -282,15 +282,19 @@ index a1cd2a9..5967ff7 100644
 +            }
 +        }
 +        if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) {
-+            extern bool TmcVita_SwallowKey(int scancode);
-+            if (TmcVita_SwallowKey((int)e.key.scancode))
++            /* e.key.key, not e.key.scancode: SDL_Scancode is an enum, 2 bytes
++             * in SDL (built with the EABI's short enums) but read as 4 bytes
++             * here (-fno-short-enums), so .scancode picks up 2 bytes of
++             * padding and only sometimes equals SDL_SCANCODE_RETURN. */
++            extern bool TmcVita_SwallowKey(unsigned keycode);
++            if (TmcVita_SwallowKey((unsigned)e.key.key))
 +                continue;
 +        }
 +#endif
          /* Forward every event to ImGui so its window/keyboard tracking
           * stays in sync. ImGui only consumes input when a widget is
           * actively hovered/focused; game input passes through. */
-@@ -471,6 +502,27 @@ static void Port_PumpEvents(void) {
+@@ -471,6 +506,27 @@ static void Port_PumpEvents(void) {
           * on both up and down edges so a release-and-re-press re-arms.
           * The toggle fires once on the down-edge of whichever button
           * completes the pair. */
@@ -318,7 +322,7 @@ index a1cd2a9..5967ff7 100644
          {
              static bool s_select_held = false, s_start_held = false;
              const bool is_down = (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
-@@ -656,6 +708,10 @@ static bool Port_PacingForceLegacy(void) {
+@@ -656,6 +712,10 @@ static bool Port_PacingForceLegacy(void) {
           * they need the one-rasterization-per-tick coupling. Pin them to the
           * legacy loop so their outputs stay comparable across versions.
           * TMC_LEGACY_PACING is the manual escape hatch. */
@@ -329,7 +333,7 @@ index a1cd2a9..5967ff7 100644
          f = (getenv("TMC_CAPTURE_FRAME") || getenv("TMC_PERFCAP") || getenv("TMC_ROOMCAP") ||
               getenv("TMC_LEGACY_PACING"))
                  ? 1
-@@ -706,6 +762,12 @@ static void Port_ProfileReportMaybe(void) {
+@@ -706,6 +766,12 @@ static void Port_ProfileReportMaybe(void) {
          double total = game + present;
          double maxGame = sProfMaxGameNs / 1e6;
          double maxPresent = sProfMaxPresentNs / 1e6;
@@ -342,7 +346,7 @@ index a1cd2a9..5967ff7 100644
          fprintf(stderr,
                  "[profile] %u frames: game=%.3f present=%.3f (render=%.3f) ms | "
                  "%.0f fps uncapped | worst: game=%.2f present=%.2f ms | presents=%u\n",
-@@ -721,6 +783,9 @@ static void Port_ProfileReportMaybe(void) {
+@@ -721,6 +787,9 @@ static void Port_ProfileReportMaybe(void) {
  
  int Port_Profile_Enabled(void) {
      static int en = -1;
@@ -352,7 +356,7 @@ index a1cd2a9..5967ff7 100644
      if (en < 0) {
          const char* e = getenv("TMC_PROFILE");
          if (e && *e && e[0] != '0') {
-@@ -745,6 +810,13 @@ void VBlankIntrWait(void) {
+@@ -745,6 +814,13 @@ void VBlankIntrWait(void) {
      u64 nowNs;
      bool decoupled;
  
