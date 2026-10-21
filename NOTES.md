@@ -107,3 +107,13 @@
   [entities] line added: entity list lengths, updates, DrawEntity calls,
   draw-list entries, frame lookups that failed, OAM pieces built.
 - Settings: L+R (both within 200 ms) on the Vita; label "L+R".
+
+## Fifth play (3666934) — the sprite / black-screen bug
+- [entities]: never more than 1-2 entities alive; the file select's objects
+  never appeared. Cause: entity.c marks a deleted entity with prev = -1 and
+  tests `(intptr_t)prev < 0` (the decomp's own @bug note). Vita pointers are
+  0x81000000+, negative as intptr_t, so every live entity counted as deleted:
+  ClearAllDeletedEntities wiped them each frame and GetEmptyEntity handed
+  out live ones. Now `== -1`.
+- Audio: enhanced mode at 48 kHz = 30-35 ms per buffer (crackle); back to
+  32 kHz GBA-accurate on the Vita (0.3 ms).

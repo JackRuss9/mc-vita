@@ -195,10 +195,37 @@ index 307540f..6715a7d 100644
      int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
      if (fd < 0) {
 diff --git a/port/port_audio.c b/port/port_audio.c
-index b18768c..1f8c94c 100644
+index b18768c..2ab0b74 100644
 --- a/port/port_audio.c
 +++ b/port/port_audio.c
-@@ -156,7 +156,11 @@ static void Port_Audio_Feed(void* userdata, SDL_AudioStream* stream, int additio
+@@ -8,7 +8,14 @@
+ #include <math.h>
+ 
+ enum {
++#ifdef TMC_VITA
++    /* Vita: 32 kHz with the GBA-accurate synth path (measured ~0.3 ms per
++     * 21 ms buffer); the enhanced path (BLEP/BLAMP resampling + output
++     * filters) at 48 kHz took 30-35 ms per buffer -> crackle. */
++    PORT_AUDIO_SAMPLE_RATE = 32000,
++#else
+     PORT_AUDIO_SAMPLE_RATE = 48000,
++#endif
+     PORT_AUDIO_CHANNELS = 2,
+     PORT_AUDIO_BYTES_PER_FRAME = sizeof(int16_t) * PORT_AUDIO_CHANNELS,
+ };
+@@ -22,7 +29,11 @@ static SDL_AudioStream* sAudioStream;
+  * false→true edge (see Port_Audio_SetGbaAccurate), there is a happens-before
+  * edge guaranteeing the audio thread has already observed accurate==true and
+  * stopped touching the filter statics. */
++#ifdef TMC_VITA
++static bool sGbaAccurate = true; /* see PORT_AUDIO_SAMPLE_RATE */
++#else
+ static bool sGbaAccurate = false;
++#endif
+ 
+ /* Mid/side widen gain for post-process stage 2 (F8 → Audio "Stereo width").
+  * Default 1.20 = the long-standing shipped image. Written on the main thread,
+@@ -156,7 +167,11 @@ static void Port_Audio_Feed(void* userdata, SDL_AudioStream* stream, int additio
      int remaining = additional_amount;
      (void)userdata;
      (void)total_amount;
@@ -210,12 +237,12 @@ index b18768c..1f8c94c 100644
      /* Trace statics (see below); also used to report render work-time. */
      static Uint64 sLastCbNs = 0, sWindowNs = 0;
      static double sMaxGap = 0.0, sReqMs = 0.0, sMaxWorkMs = 0.0, sSumWorkMs = 0.0;
-@@ -316,6 +320,10 @@ bool Port_Audio_Init(void) {
+@@ -316,6 +331,10 @@ bool Port_Audio_Init(void) {
      }
  #endif
  
 +#ifdef TMC_VITA
-+    /* 1024 frames (~21 ms) per audio callback */
++    /* 1024 frames per audio callback (32 ms at 32 kHz) */
 +    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "1024");
 +#endif
      sAudioStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, Port_Audio_Feed, NULL);
@@ -450,10 +477,22 @@ index b2e70e1..11efc7f 100644
      } else {
          ImGui::TextDisabled("Glitch tricks are selectable when Glitchless logic is OFF.");
 diff --git a/port/port_m4a_backend.cpp b/port/port_m4a_backend.cpp
-index 23326ed..c735eb7 100644
+index 23326ed..8c2a470 100644
 --- a/port/port_m4a_backend.cpp
 +++ b/port/port_m4a_backend.cpp
-@@ -650,7 +650,7 @@ static void RenderChunkLocked(void) {
+@@ -102,7 +102,11 @@ struct BackendState {
+     /* GBA-accurate audio toggle (F8 → Audio). false = enhanced (BLEP/BLAMP); true =
+      * NEAREST sample-and-hold + no forced reverb. Read by MakeAgbplayMode when
+      * the context is (re)built, and mutated live by SetGbaAccurate. */
++#ifdef TMC_VITA
++    bool gbaAccurate = true; /* matches port_audio.c on the Vita */
++#else
+     bool gbaAccurate = false;
++#endif
+     /* Forced PCM-reverb level byte (F8 → Audio "Reverb"). 0x00 = OFF (dry —
+      * ships unchanged). When enabled it is (0x80 | level), level 1..0x7F; the
+      * 0x80 REV_MASK_SET bit is what actually engages SoundMixer::GetReverbLevel
+@@ -650,7 +654,7 @@ static void RenderChunkLocked(void) {
                  const auto& track = player.tracks[trackIndex];
                  const float gain = static_cast<float>(sState.trackVolumes[playerIndex][trackIndex]) / 255.0f;
  
@@ -1666,7 +1705,7 @@ index b16526f..77eebfe 100644
  #endif
      /*0x80*/ u16 unk_80;
 diff --git a/src/entity.c b/src/entity.c
-index b33763a..a69ec90 100644
+index b33763a..88159c4 100644
 --- a/src/entity.c
 +++ b/src/entity.c
 @@ -12,7 +12,7 @@
@@ -1678,6 +1717,76 @@ index b33763a..a69ec90 100644
      /*
       * 64-bit: Must be large enough for the biggest manager struct.
       * FightManagerHelper / EnemyInteractionManager have Entity* enemies[8]
+@@ -382,14 +382,14 @@ Entity* GetEmptyEntity() {
+         int i;
+         Entity* ent;
+         ent = &gPlayerEntity.base;
+-        if ((intptr_t)ent->prev < 0 && (ent->flags & (ENT_UNUSED1 | ENT_UNUSED2)) &&
++        if ((intptr_t)ent->prev == -1 && (ent->flags & (ENT_UNUSED1 | ENT_UNUSED2)) &&
+             ent != gUpdateContext.current_entity) {
+             ClearDeletedEntity(ent);
+             return ent;
+         }
+         for (i = 0; i < MAX_AUX_PLAYER_ENTITIES; i++) {
+             ent = &gAuxPlayerEntities[i].base;
+-            if ((intptr_t)ent->prev < 0 && (ent->flags & (ENT_UNUSED1 | ENT_UNUSED2)) &&
++            if ((intptr_t)ent->prev == -1 && (ent->flags & (ENT_UNUSED1 | ENT_UNUSED2)) &&
+                 ent != gUpdateContext.current_entity) {
+                 ClearDeletedEntity(ent);
+                 return ent;
+@@ -397,7 +397,7 @@ Entity* GetEmptyEntity() {
+         }
+         for (i = 0; i < MAX_ENTITIES; i++) {
+             ent = &gEntities[i].base;
+-            if ((intptr_t)ent->prev < 0 && (ent->flags & (ENT_UNUSED1 | ENT_UNUSED2)) &&
++            if ((intptr_t)ent->prev == -1 && (ent->flags & (ENT_UNUSED1 | ENT_UNUSED2)) &&
+                 ent != gUpdateContext.current_entity) {
+                 ClearDeletedEntity(ent);
+                 return ent;
+@@ -408,7 +408,7 @@ Entity* GetEmptyEntity() {
+     currentEnt = (GenericEntity*)&gPlayerEntity.base;
+ 
+     do {
+-        if ((intptr_t)currentEnt->base.prev < 0 && (currentEnt->base.flags & (ENT_UNUSED1 | ENT_UNUSED2)) &&
++        if ((intptr_t)currentEnt->base.prev == -1 && (currentEnt->base.flags & (ENT_UNUSED1 | ENT_UNUSED2)) &&
+             (Entity*)currentEnt != gUpdateContext.current_entity) {
+             ClearDeletedEntity(&currentEnt->base);
+             return &currentEnt->base;
+@@ -561,7 +561,7 @@ Entity* GetEmptyEntity() {
+             /* Try the first available recovered slot. */
+             for (i = 0; i < MAX_ENTITIES; i++) {
+                 Entity* ent = &gEntities[i].base;
+-                if ((intptr_t)ent->prev < 0 && (ent->flags & ENT_UNUSED1) && ent != gUpdateContext.current_entity) {
++                if ((intptr_t)ent->prev == -1 && (ent->flags & ENT_UNUSED1) && ent != gUpdateContext.current_entity) {
+                     ClearDeletedEntity(ent);
+                     return ent;
+                 }
+@@ -671,21 +671,21 @@ void ClearAllDeletedEntities(void) {
+ #ifdef PC_PORT
+     /* On PC, gPlayerEntity/gAuxPlayerEntities/gEntities are separate globals. */
+     int i;
+-    if ((intptr_t)gPlayerEntity.base.prev < 0)
++    if ((intptr_t)gPlayerEntity.base.prev == -1)
+         ClearDeletedEntity(&gPlayerEntity.base);
+     for (i = 0; i < MAX_AUX_PLAYER_ENTITIES; i++) {
+-        if ((intptr_t)gAuxPlayerEntities[i].base.prev < 0)
++        if ((intptr_t)gAuxPlayerEntities[i].base.prev == -1)
+             ClearDeletedEntity(&gAuxPlayerEntities[i].base);
+     }
+     for (i = 0; i < MAX_ENTITIES; i++) {
+-        if ((intptr_t)gEntities[i].base.prev < 0)
++        if ((intptr_t)gEntities[i].base.prev == -1)
+             ClearDeletedEntity(&gEntities[i].base);
+     }
+ #else
+     GenericEntity* ent = (GenericEntity*)&gPlayerEntity.base;
+     do {
+         //! @bug if prev pointed to a VALID location higher than a signed int, would still be deleted
+-        if ((intptr_t)ent->base.prev < 0) {
++        if ((intptr_t)ent->base.prev == -1) {
+             ClearDeletedEntity(&ent->base);
+         }
+     } while (ent++, ent < (((GenericEntity*)&gPlayerEntity.base) + 80));
 diff --git a/src/projectile/ballAndChain.c b/src/projectile/ballAndChain.c
 index d691aa4..651cc71 100644
 --- a/src/projectile/ballAndChain.c
