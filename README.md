@@ -147,8 +147,11 @@ Buttons can be rebound in the settings menu.
 
 ## Installing and playing
 
-1. Install `tmc.vpk` with VitaShell. Build it yourself as described below; it
-   isn't distributed.
+1. Download `mc-vita-v1.0.0.vpk` from the
+   [Releases](https://github.com/JackRuss9/mc-vita/releases) page (or build it
+   yourself, see [Building](#building)) and install it with VitaShell. The
+   .vpk contains only the program: no ROM, graphics, music or text from the
+   game.
 2. Copy your ROM to `ux0:data/tmc/baserom.gba` (USA). An EU ROM goes in as
    `ux0:data/tmc/baserom_eu.gba`, which is untested.
 3. Start the game. In the launcher, choose the region and language, tick
@@ -210,7 +213,10 @@ full story is in [NOTES.md](NOTES.md).
 
 An unofficial fan project, not affiliated with or endorsed by Nintendo. It
 contains no game data, art or audio; you need your own copy of the game.
-**Please do not share ROMs, extracted assets or built `.vpk` files.**
+The released .vpk is compiled from source code only; everything from the
+game is extracted on your own Vita from your own ROM.
+**Please do not share ROMs, extracted assets (`assets/`, `assets_src/`,
+`rom_data/`) or save files, and do not ask for them in issues.**
 
 Project Picori is licensed under the GNU GPL v3, and so is everything in this
 repository (see [LICENSE](LICENSE)). The libraries it uses keep their own
