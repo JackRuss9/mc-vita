@@ -117,3 +117,11 @@
   out live ones. Now `== -1`.
 - Audio: enhanced mode at 48 kHz = 30-35 ms per buffer (crackle); back to
   32 kHz GBA-accurate on the Vita (0.3 ms).
+
+## Sixth play (79dd583)
+- Sprites, text, music fine; rooms' tiles scrambled (16x16 blocks wrong or
+  black), Link walking off the room, stairs not working. Cause:
+  Port_ResolveEwramPtr maps GBA addresses inside gMapBottom/gMapTop
+  (MapLayer, which starts with a pointer) to native offsets with a fixed +4
+  for the widened pointer: on 32-bit everything (mapData, collision,
+  subTiles, actTiles) landed 4 bytes off. Shift is now sizeof(void*) - 4.
