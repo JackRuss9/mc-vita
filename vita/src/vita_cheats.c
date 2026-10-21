@@ -12,6 +12,7 @@
 #include "save.h"
 #include "item.h"
 
+#include <SDL3/SDL.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -36,6 +37,8 @@ static const struct {
     [TMC_CHEAT_KINSTONES] = { "kinstones", "All regular Kinstones (99 each)",
                               "Red, blue and green pieces in the bag (not gold/story ones); needs the Kinstone Bag." },
     [TMC_CHEAT_SHELLS] = { "shells", "Mysterious Shells always 999", "Spent shells come back." },
+    [TMC_CHEAT_BOMBS_FULL] = { "bombs_full", "Bomb bag always full", "Bombs stay at your bag's size (needs a bomb bag)." },
+    [TMC_CHEAT_ARROWS_FULL] = { "arrows_full", "Quiver always full", "Arrows stay at your quiver's size (needs the bow)." },
 };
 
 static bool sCheat[TMC_CHEAT_COUNT];
@@ -120,8 +123,83 @@ void TmcVita_Cheats_Frame(void) {
         if (gSave.stats.rupees < size)
             gSave.stats.rupees = size;
     }
-    if (sCheat[TMC_CHEAT_SHELLS] && gSave.stats.shells < 999)
+    /* Exactly 999: with Picori's "shells cap 9999" (Reborn tab) a pickup on
+     * top of 999 went past 1000, and the 3-digit counter then showed only
+     * the last digits (999 + 20 read as "019"). */
+    if (sCheat[TMC_CHEAT_SHELLS] && gSave.stats.shells != 999)
         gSave.stats.shells = 999;
+    /* bag/quiver type 0 is the first one (10 bombs, 30 arrows): owning the
+     * item is what says there is one */
+    if (sCheat[TMC_CHEAT_BOMBS_FULL] && GetInventoryValue(ITEM_BOMBS) != 0) {
+        const u8 size = gBombBagSizes[gSave.stats.bombBagType];
+        if (gSave.stats.bombCount < size)
+            gSave.stats.bombCount = size;
+    }
+    if (sCheat[TMC_CHEAT_ARROWS_FULL] &&
+        (GetInventoryValue(ITEM_BOW) != 0 || GetInventoryValue(ITEM_LIGHT_ARROW) != 0)) {
+        const u8 size = gQuiverSizes[gSave.stats.quiverType];
+        if (gSave.stats.arrowCount < size)
+            gSave.stats.arrowCount = size;
+    }
     if (sCheat[TMC_CHEAT_KINSTONES])
         FillKinstones();
+}
+
+/* ---- Change the player's name (any time) ------------------------------- */
+
+static bool sWaitingName;
+static char sNameStatus[64];
+
+void TmcVita_RequestNameChange(void) {
+    SDL_Window* window = SDL_GetKeyboardFocus();
+    if (window == NULL) {
+        int count = 0;
+        SDL_Window** windows = SDL_GetWindows(&count);
+        if (windows != NULL && count > 0)
+            window = windows[0];
+        SDL_free(windows);
+    }
+    if (window == NULL || !SDL_StartTextInput(window)) {
+        snprintf(sNameStatus, sizeof sNameStatus, "Keyboard unavailable");
+        return;
+    }
+    sWaitingName = true;
+    snprintf(sNameStatus, sizeof sNameStatus, "Type the new name...");
+}
+
+/* Letters, digits, space and - . , (what the game's own name screen offers
+ * in plain ASCII); up to 6 characters. */
+bool TmcVita_OnTextInput(const char* text) {
+    if (!sWaitingName)
+        return false;
+    sWaitingName = false;
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
+    u8 name[FILENAME_LENGTH];
+    int n = 0;
+    memset(name, 0, sizeof name);
+    for (const char* p = text; *p != '\0' && n < FILENAME_LENGTH; p++) {
+        const char c = *p;
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == ' ' || c == '-' ||
+            c == '.' || c == ',')
+            name[n++] = (u8)c;
+    }
+    if (n == 0) {
+        snprintf(sNameStatus, sizeof sNameStatus, "Name unchanged (nothing usable typed)");
+        return true;
+    }
+    memcpy(gSave.name, name, sizeof name);
+    snprintf(sNameStatus, sizeof sNameStatus, "Name set to %.*s - save in-game to keep it", n, (const char*)name);
+    fprintf(stderr, "[cheats] name -> %.*s\n", n, (const char*)name);
+    return true;
+}
+
+const char* TmcVita_NameStatus(void) {
+    return sNameStatus;
+}
+
+const char* TmcVita_CurrentName(void) {
+    static char name[FILENAME_LENGTH + 1];
+    memcpy(name, gSave.name, FILENAME_LENGTH);
+    name[FILENAME_LENGTH] = '\0';
+    return name;
 }

@@ -249,10 +249,25 @@ index b18768c..2ab0b74 100644
      if (sAudioStream == NULL) {
          SDL_Log("Port_Audio_Init: SDL_OpenAudioDeviceStream failed: %s", SDL_GetError());
 diff --git a/port/port_bios.c b/port/port_bios.c
-index a1cd2a9..7764dc4 100644
+index a1cd2a9..9d23775 100644
 --- a/port/port_bios.c
 +++ b/port/port_bios.c
-@@ -471,6 +471,27 @@ static void Port_PumpEvents(void) {
+@@ -224,6 +224,14 @@ static void Port_UpdateInput(void) {
+ static void Port_PumpEvents(void) {
+     SDL_Event e;
+     while (SDL_PollEvent(&e)) {
++#ifdef TMC_VITA
++        /* the Vita keyboard's answer to "Change name" (vita_cheats.c) */
++        if (e.type == SDL_EVENT_TEXT_INPUT) {
++            extern bool TmcVita_OnTextInput(const char* text);
++            if (TmcVita_OnTextInput(e.text.text))
++                continue;
++        }
++#endif
+         /* Forward every event to ImGui so its window/keyboard tracking
+          * stays in sync. ImGui only consumes input when a widget is
+          * actively hovered/focused; game input passes through. */
+@@ -471,6 +479,27 @@ static void Port_PumpEvents(void) {
           * on both up and down edges so a release-and-re-press re-arms.
           * The toggle fires once on the down-edge of whichever button
           * completes the pair. */
@@ -280,7 +295,7 @@ index a1cd2a9..7764dc4 100644
          {
              static bool s_select_held = false, s_start_held = false;
              const bool is_down = (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
-@@ -656,6 +677,10 @@ static bool Port_PacingForceLegacy(void) {
+@@ -656,6 +685,10 @@ static bool Port_PacingForceLegacy(void) {
           * they need the one-rasterization-per-tick coupling. Pin them to the
           * legacy loop so their outputs stay comparable across versions.
           * TMC_LEGACY_PACING is the manual escape hatch. */
@@ -291,7 +306,7 @@ index a1cd2a9..7764dc4 100644
          f = (getenv("TMC_CAPTURE_FRAME") || getenv("TMC_PERFCAP") || getenv("TMC_ROOMCAP") ||
               getenv("TMC_LEGACY_PACING"))
                  ? 1
-@@ -706,6 +731,12 @@ static void Port_ProfileReportMaybe(void) {
+@@ -706,6 +739,12 @@ static void Port_ProfileReportMaybe(void) {
          double total = game + present;
          double maxGame = sProfMaxGameNs / 1e6;
          double maxPresent = sProfMaxPresentNs / 1e6;
@@ -304,7 +319,7 @@ index a1cd2a9..7764dc4 100644
          fprintf(stderr,
                  "[profile] %u frames: game=%.3f present=%.3f (render=%.3f) ms | "
                  "%.0f fps uncapped | worst: game=%.2f present=%.2f ms | presents=%u\n",
-@@ -721,6 +752,9 @@ static void Port_ProfileReportMaybe(void) {
+@@ -721,6 +760,9 @@ static void Port_ProfileReportMaybe(void) {
  
  int Port_Profile_Enabled(void) {
      static int en = -1;
@@ -314,7 +329,7 @@ index a1cd2a9..7764dc4 100644
      if (en < 0) {
          const char* e = getenv("TMC_PROFILE");
          if (e && *e && e[0] != '0') {
-@@ -745,6 +779,13 @@ void VBlankIntrWait(void) {
+@@ -745,6 +787,13 @@ void VBlankIntrWait(void) {
      u64 nowNs;
      bool decoupled;
  
@@ -444,10 +459,10 @@ index 0fd1133..f2d6c10 100644
  #define PORT_HAVE_EXECINFO 1
  #else
 diff --git a/port/port_imgui_menu.cpp b/port/port_imgui_menu.cpp
-index 7faa3cf..a66eacc 100644
+index 7faa3cf..4f7534c 100644
 --- a/port/port_imgui_menu.cpp
 +++ b/port/port_imgui_menu.cpp
-@@ -489,6 +489,21 @@ void Port_Practice_TogglePause(void);
+@@ -489,6 +489,30 @@ void Port_Practice_TogglePause(void);
  extern "C" void Port_DebugMenu_ToastFromExternal(const char* msg);
  
  #include "port_imgui_items_tab.inc"
@@ -455,6 +470,15 @@ index 7faa3cf..a66eacc 100644
 +#include "vita_cheats.h"
 +/* Vita: the in-game cheats (vita/src/vita_cheats.c) */
 +static void DrawVitaCheatsTab(void) {
++    {
++        ImGui::Text("Name: %s", TmcVita_CurrentName());
++        ImGui::SameLine();
++        if (ImGui::Button("Change name..."))
++            TmcVita_RequestNameChange();
++        ImGui::SameLine();
++        ImGui::TextDisabled("%s", TmcVita_NameStatus());
++    }
++    ImGui::Separator();
 +    ImGui::TextDisabled("Remembered between sessions (ux0:data/tmc/cheats.txt).");
 +    ImGui::Spacing();
 +    for (int i = 0; i < TMC_CHEAT_COUNT; i++) {
@@ -469,7 +493,7 @@ index 7faa3cf..a66eacc 100644
  
  #include "port_imgui_flags_tab.inc"
  
-@@ -641,6 +656,12 @@ static void DrawRibbon(void) {
+@@ -641,6 +665,12 @@ static void DrawRibbon(void) {
          ImGui::PopStyleColor(3);
  
          if (ImGui::BeginTabBar("##ribbonTabs", ImGuiTabBarFlags_None)) {
@@ -482,7 +506,7 @@ index 7faa3cf..a66eacc 100644
              if (ImGui::BeginTabItem("Items")) {
                  DrawRibbonItemsTab();
                  ImGui::EndTabItem();
-@@ -729,7 +750,11 @@ static void DrawRibbon(void) {
+@@ -729,7 +759,11 @@ static void DrawRibbon(void) {
              Port_Config_SetRibbonEnabled(useRibbon); /* persist (#146) */
          }
          ImGui::SameLine();
@@ -494,7 +518,7 @@ index 7faa3cf..a66eacc 100644
          ImGui::TextDisabled("F5/F6 quicksave/load   F9 bug report   -   see the Controls tab for all hotkeys");
      }
      ImGui::End();
-@@ -1033,7 +1058,11 @@ static void DrawMenuTrigger(void) {
+@@ -1033,7 +1067,11 @@ static void DrawMenuTrigger(void) {
          /* Closed: single triple-bar ASCII '=' stacked into a hamburger
           * shape (the default ImGui font doesn't ship U+2261 ≡). First run:
           * spelled-out "Settings (F8)". Open: clear close label. */

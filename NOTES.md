@@ -159,3 +159,10 @@
   the bag), shells 999.
 - Warp tab: areas with 1-2 rooms left a SameLine pending, the next header
   drew over the buttons.
+- Cheats feedback (d9ccba5): all work except shells: with Reborn's 9999
+  shell cap, 999 + a pickup went past 1000 and the 3-digit counter showed
+  "0xx". Now held at exactly 999. Added: bomb bag / quiver always full
+  (owning bombs / bow), "Change name..." (Vita keyboard via
+  SDL_StartTextInput; the text event is taken in port_bios.c's event loop).
+- Slow spots (40-48 fps): dungeon rooms with colour effects (composite slow
+  path, render ~10 ms) and HD dialogue text boxes (ImGui ~5-7 ms).
