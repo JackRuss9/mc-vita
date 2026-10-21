@@ -89,7 +89,7 @@ Tested on a real PS Vita (HENkaku, installed with VitaShell), USA ROM, English:
 | --- | --- |
 | First start: launcher, region/language choice, asset extraction | ✅ works (the first extraction is very slow, see below) |
 | Title screen, file select, new file, naming | ✅ |
-| Intro storybook, skipping it with Start | ✅ (small visual glitches, see below) |
+| Intro storybook, skipping it with Start | ✅ |
 | Gameplay up to and through the first dungeon (Deepwood Shrine) | ✅ |
 | Going between floors and rooms, stairs, room transitions | ✅ |
 | Sound effects and music | ✅ (32 kHz GBA-accurate) |
@@ -124,10 +124,6 @@ Tested on a real PS Vita (HENkaku, installed with VitaShell), USA ROM, English:
     40-48 fps;
   - text boxes with HD dialogue on cost a few fps;
   - the file select screen runs at about 30 fps.
-- **Opening storybook (visual only):**
-  - in widescreen, the area left of the stained-glass picture shows a
-    repeated strip of the picture instead of the background;
-  - a few stray characters can show at the end of some text lines.
 - **Room transitions** briefly show the black side bars instead of
   widescreen. This is how Picori does it.
 - After the Vita keyboard (Change name) closes, the game can pause for a
