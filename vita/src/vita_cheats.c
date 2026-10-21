@@ -149,8 +149,19 @@ void TmcVita_Cheats_Frame(void) {
 
 static bool sWaitingName;
 static char sNameStatus[64];
+/* When the keyboard closed: SDL follows the typed text with an Enter key
+ * press, which re-activated the focused "Change name..." button and opened
+ * the keyboard again. That Enter is dropped (TmcVita_SwallowKey) and the
+ * button ignored for a moment. */
+static Uint64 sKeyboardClosedMs;
+
+bool TmcVita_SwallowKey(int scancode) {
+    return scancode == SDL_SCANCODE_RETURN && sKeyboardClosedMs != 0 && SDL_GetTicks() - sKeyboardClosedMs < 500;
+}
 
 void TmcVita_RequestNameChange(void) {
+    if (sWaitingName || (sKeyboardClosedMs != 0 && SDL_GetTicks() - sKeyboardClosedMs < 500))
+        return;
     SDL_Window* window = SDL_GetKeyboardFocus();
     if (window == NULL) {
         int count = 0;
@@ -173,6 +184,7 @@ bool TmcVita_OnTextInput(const char* text) {
     if (!sWaitingName)
         return false;
     sWaitingName = false;
+    sKeyboardClosedMs = SDL_GetTicks();
     SDL_StopTextInput(SDL_GetKeyboardFocus());
     u8 name[FILENAME_LENGTH];
     int n = 0;
