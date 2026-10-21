@@ -136,3 +136,14 @@
   pointer per line. Falls back to one thread if the threads can't be told
   apart. PPU sources at -O3.
 - [present] line: texture upload + draw, menus/overlays, flip + VSync.
+
+## Speed, round 2 (67e1b97: 3 render threads)
+- 1-room house: ~58 fps (game 4.6, render 6.7, present 12.5 ms); wide rooms
+  (282 px): ~45 fps (render 10.7 ms). Of the present: upload 0.6, ImGui
+  overlay 1.6 (HD dialogue and menu art draw through it, so it stays), flip
+  0.35; the remaining ~3 ms was colour correction over all 384x160 pixels.
+- Colour correction now on the PPU's 512-entry palette LUTs (hook
+  virtuappu_mode1_palette_lut_post); BG lines drawn per tile run (one map
+  read + one row fetch per 8 px); composite fast path for lines without
+  windows, colour effects or semi-transparent OBJ.
+- [ppu] line: bg/obj/composite time of the main thread's third of the lines.

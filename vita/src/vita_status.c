@@ -21,6 +21,7 @@ extern LinkedList gEntityLists[9];
 /* summed by port_ppu.cpp's present (texture upload + draw call, menus and
  * overlays, flip incl. the VSync wait) */
 unsigned long long gTmcVitaUploadNs, gTmcVitaOverlayNs, gTmcVitaFlipNs;
+extern unsigned gTmcVitaPpuBgUs, gTmcVitaPpuObjUs, gTmcVitaPpuCompUs; /* mode1.c, main thread's lines */
 
 static unsigned io16(unsigned off)
 {
@@ -57,6 +58,9 @@ void TmcVita_LogStatus(void)
     fprintf(stderr, "[present] per frame: upload+draw=%.2f menus/overlays=%.2f flip+vsync=%.2f ms\n",
             gTmcVitaUploadNs / 1e6 / 120.0, gTmcVitaOverlayNs / 1e6 / 120.0, gTmcVitaFlipNs / 1e6 / 120.0);
     gTmcVitaUploadNs = gTmcVitaOverlayNs = gTmcVitaFlipNs = 0;
+    fprintf(stderr, "[ppu] per frame on the main thread's lines: bg=%.2f obj=%.2f composite=%.2f ms\n",
+            gTmcVitaPpuBgUs / 1000.0 / 120.0, gTmcVitaPpuObjUs / 1000.0 / 120.0, gTmcVitaPpuCompUs / 1000.0 / 120.0);
+    gTmcVitaPpuBgUs = gTmcVitaPpuObjUs = gTmcVitaPpuCompUs = 0;
     fprintf(stderr,
             "[status] task=%u state=%u sub=%u overlay=%u | fade active=%u type=%04x progress=%u color=%u | "
             "DISPCNT=%04x(%04x) BLDCNT=%04x BLDY=%04x WIN0H=%04x WININ=%04x WINOUT=%04x | "
