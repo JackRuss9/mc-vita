@@ -249,10 +249,10 @@ index b18768c..2ab0b74 100644
      if (sAudioStream == NULL) {
          SDL_Log("Port_Audio_Init: SDL_OpenAudioDeviceStream failed: %s", SDL_GetError());
 diff --git a/port/port_bios.c b/port/port_bios.c
-index a1cd2a9..3b39d81 100644
+index a1cd2a9..5967ff7 100644
 --- a/port/port_bios.c
 +++ b/port/port_bios.c
-@@ -224,6 +224,25 @@ static void Port_UpdateInput(void) {
+@@ -224,6 +224,37 @@ static void Port_UpdateInput(void) {
  static void Port_PumpEvents(void) {
      SDL_Event e;
      while (SDL_PollEvent(&e)) {
@@ -263,11 +263,23 @@ index a1cd2a9..3b39d81 100644
 +            if (TmcVita_OnTextInput(e.text.text))
 +                continue;
 +        }
-+        if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || e.type == SDL_EVENT_GAMEPAD_BUTTON_UP ||
-+            e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
++        {
 +            extern bool TmcVita_KeyboardBusy(void);
-+            if (TmcVita_KeyboardBusy())
-+                continue;
++            if (TmcVita_KeyboardBusy()) {
++                /* what arrives while the Vita keyboard is up (bring-up log) */
++                static int sLoggedEvents;
++                if (sLoggedEvents < 200 && e.type != SDL_EVENT_GAMEPAD_AXIS_MOTION &&
++                    e.type != SDL_EVENT_JOYSTICK_AXIS_MOTION) {
++                    sLoggedEvents++;
++                    fprintf(stderr, "[keyboard] event 0x%x\n", (unsigned)e.type);
++                }
++                if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || e.type == SDL_EVENT_GAMEPAD_BUTTON_UP ||
++                    e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION || e.type == SDL_EVENT_FINGER_DOWN ||
++                    e.type == SDL_EVENT_FINGER_UP || e.type == SDL_EVENT_FINGER_MOTION ||
++                    e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_UP ||
++                    e.type == SDL_EVENT_MOUSE_MOTION)
++                    continue;
++            }
 +        }
 +        if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) {
 +            extern bool TmcVita_SwallowKey(int scancode);
@@ -278,7 +290,7 @@ index a1cd2a9..3b39d81 100644
          /* Forward every event to ImGui so its window/keyboard tracking
           * stays in sync. ImGui only consumes input when a widget is
           * actively hovered/focused; game input passes through. */
-@@ -471,6 +490,27 @@ static void Port_PumpEvents(void) {
+@@ -471,6 +502,27 @@ static void Port_PumpEvents(void) {
           * on both up and down edges so a release-and-re-press re-arms.
           * The toggle fires once on the down-edge of whichever button
           * completes the pair. */
@@ -306,7 +318,7 @@ index a1cd2a9..3b39d81 100644
          {
              static bool s_select_held = false, s_start_held = false;
              const bool is_down = (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
-@@ -656,6 +696,10 @@ static bool Port_PacingForceLegacy(void) {
+@@ -656,6 +708,10 @@ static bool Port_PacingForceLegacy(void) {
           * they need the one-rasterization-per-tick coupling. Pin them to the
           * legacy loop so their outputs stay comparable across versions.
           * TMC_LEGACY_PACING is the manual escape hatch. */
@@ -317,7 +329,7 @@ index a1cd2a9..3b39d81 100644
          f = (getenv("TMC_CAPTURE_FRAME") || getenv("TMC_PERFCAP") || getenv("TMC_ROOMCAP") ||
               getenv("TMC_LEGACY_PACING"))
                  ? 1
-@@ -706,6 +750,12 @@ static void Port_ProfileReportMaybe(void) {
+@@ -706,6 +762,12 @@ static void Port_ProfileReportMaybe(void) {
          double total = game + present;
          double maxGame = sProfMaxGameNs / 1e6;
          double maxPresent = sProfMaxPresentNs / 1e6;
@@ -330,7 +342,7 @@ index a1cd2a9..3b39d81 100644
          fprintf(stderr,
                  "[profile] %u frames: game=%.3f present=%.3f (render=%.3f) ms | "
                  "%.0f fps uncapped | worst: game=%.2f present=%.2f ms | presents=%u\n",
-@@ -721,6 +771,9 @@ static void Port_ProfileReportMaybe(void) {
+@@ -721,6 +783,9 @@ static void Port_ProfileReportMaybe(void) {
  
  int Port_Profile_Enabled(void) {
      static int en = -1;
@@ -340,7 +352,7 @@ index a1cd2a9..3b39d81 100644
      if (en < 0) {
          const char* e = getenv("TMC_PROFILE");
          if (e && *e && e[0] != '0') {
-@@ -745,6 +798,13 @@ void VBlankIntrWait(void) {
+@@ -745,6 +810,13 @@ void VBlankIntrWait(void) {
      u64 nowNs;
      bool decoupled;
  
@@ -354,6 +366,18 @@ index a1cd2a9..3b39d81 100644
      /* Practice-mode pause: hold the engine here, presenting and pumping
       * events only (no Port_UpdateInput, so the game state can't advance),
       * until unpaused or a single frame-advance step is requested. The F8
+diff --git a/port/port_debug_actions.c b/port/port_debug_actions.c
+index a51ea06..cbef237 100644
+--- a/port/port_debug_actions.c
++++ b/port/port_debug_actions.c
+@@ -60,6 +60,7 @@ static unsigned int GetItem(unsigned int item) {
+ }
+ 
+ void Port_DebugAction_GiveAllItems(void) {
++    fprintf(stderr, "[debug-action] give all items\n");
+     /* Build a COMPLETE file by whitelisting the real items + writing the Stats
+      * / bottle / dungeon fields directly. A blanket inventory fill corrupts the
+      * pause grid: 0xFF makes each 2-bit field 3 (failing the ==1 draw guard, so
 diff --git a/port/port_draw.c b/port/port_draw.c
 index 630d56d..4580be4 100644
 --- a/port/port_draw.c
@@ -470,7 +494,7 @@ index 0fd1133..f2d6c10 100644
  #define PORT_HAVE_EXECINFO 1
  #else
 diff --git a/port/port_imgui_menu.cpp b/port/port_imgui_menu.cpp
-index 7faa3cf..872f238 100644
+index 7faa3cf..199bc65 100644
 --- a/port/port_imgui_menu.cpp
 +++ b/port/port_imgui_menu.cpp
 @@ -489,6 +489,30 @@ void Port_Practice_TogglePause(void);
@@ -553,6 +577,32 @@ index 7faa3cf..872f238 100644
      {
          ImGuiIO& io = ImGui::GetIO();
          if (navWanted) {
+@@ -1437,6 +1479,13 @@ extern "C" bool Port_ImGui_Render(void) {
+ 
+     /* Always show the click-to-open trigger so mouse/touch users have a
+      * way in without the F8 hotkey. */
++#ifdef TMC_VITA
++    /* While the Vita keyboard is up (and just after), the menu isn't drawn
++     * at all, so nothing in it can be pressed by input meant for the
++     * keyboard. */
++    const bool tmcVitaKeyboardBusy = TmcVita_KeyboardBusy();
++    if (!tmcVitaKeyboardBusy)
++#endif
+     DrawMenuTrigger();
+ 
+     /* Quit-save confirm modal — only renders when armed by
+@@ -1445,6 +1494,11 @@ extern "C" bool Port_ImGui_Render(void) {
+      * the user gets a chance to save even with the menu closed. */
+     DrawQuitModal();
+ 
++#ifdef TMC_VITA
++    if (Port_DebugMenu_IsOpen() && tmcVitaKeyboardBusy) {
++        /* see above */
++    } else
++#endif
+     if (Port_DebugMenu_IsOpen()) {
+         if (sRibbonEnabled) {
+             DrawRibbon();
 diff --git a/port/port_imgui_randomizer_tab.inc b/port/port_imgui_randomizer_tab.inc
 index b2e70e1..11efc7f 100644
 --- a/port/port_imgui_randomizer_tab.inc
