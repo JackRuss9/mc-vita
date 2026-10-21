@@ -195,37 +195,10 @@ index 307540f..6715a7d 100644
      int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
      if (fd < 0) {
 diff --git a/port/port_audio.c b/port/port_audio.c
-index b18768c..07c265f 100644
+index b18768c..1f8c94c 100644
 --- a/port/port_audio.c
 +++ b/port/port_audio.c
-@@ -8,7 +8,14 @@
- #include <math.h>
- 
- enum {
-+#ifdef TMC_VITA
-+    /* The agbplay synth's cost scales with the output rate; at 48 kHz it took
-+     * ~2x real time on the Vita. 32 kHz is still well above the rate the
-+     * GBA itself mixed at. */
-+    PORT_AUDIO_SAMPLE_RATE = 32000,
-+#else
-     PORT_AUDIO_SAMPLE_RATE = 48000,
-+#endif
-     PORT_AUDIO_CHANNELS = 2,
-     PORT_AUDIO_BYTES_PER_FRAME = sizeof(int16_t) * PORT_AUDIO_CHANNELS,
- };
-@@ -22,7 +29,11 @@ static SDL_AudioStream* sAudioStream;
-  * false→true edge (see Port_Audio_SetGbaAccurate), there is a happens-before
-  * edge guaranteeing the audio thread has already observed accurate==true and
-  * stopped touching the filter statics. */
-+#ifdef TMC_VITA
-+static bool sGbaAccurate = true; /* NEAREST resampling, no post-process: lighter on the Vita's CPU */
-+#else
- static bool sGbaAccurate = false;
-+#endif
- 
- /* Mid/side widen gain for post-process stage 2 (F8 → Audio "Stereo width").
-  * Default 1.20 = the long-standing shipped image. Written on the main thread,
-@@ -156,7 +167,11 @@ static void Port_Audio_Feed(void* userdata, SDL_AudioStream* stream, int additio
+@@ -156,7 +156,11 @@ static void Port_Audio_Feed(void* userdata, SDL_AudioStream* stream, int additio
      int remaining = additional_amount;
      (void)userdata;
      (void)total_amount;
@@ -237,20 +210,19 @@ index b18768c..07c265f 100644
      /* Trace statics (see below); also used to report render work-time. */
      static Uint64 sLastCbNs = 0, sWindowNs = 0;
      static double sMaxGap = 0.0, sReqMs = 0.0, sMaxWorkMs = 0.0, sSumWorkMs = 0.0;
-@@ -316,6 +331,11 @@ bool Port_Audio_Init(void) {
+@@ -316,6 +320,10 @@ bool Port_Audio_Init(void) {
      }
  #endif
  
 +#ifdef TMC_VITA
-+    /* 1024 frames at 32 kHz (~32 ms), on the Vita's BGM port (SDL opens that
-+     * one for rates below 48 kHz, so there's no resampling). */
++    /* 1024 frames (~21 ms) per audio callback */
 +    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "1024");
 +#endif
      sAudioStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, Port_Audio_Feed, NULL);
      if (sAudioStream == NULL) {
          SDL_Log("Port_Audio_Init: SDL_OpenAudioDeviceStream failed: %s", SDL_GetError());
 diff --git a/port/port_bios.c b/port/port_bios.c
-index a1cd2a9..d64989b 100644
+index a1cd2a9..aacf868 100644
 --- a/port/port_bios.c
 +++ b/port/port_bios.c
 @@ -656,6 +656,10 @@ static bool Port_PacingForceLegacy(void) {
@@ -264,7 +236,20 @@ index a1cd2a9..d64989b 100644
          f = (getenv("TMC_CAPTURE_FRAME") || getenv("TMC_PERFCAP") || getenv("TMC_ROOMCAP") ||
               getenv("TMC_LEGACY_PACING"))
                  ? 1
-@@ -721,6 +725,9 @@ static void Port_ProfileReportMaybe(void) {
+@@ -706,6 +710,12 @@ static void Port_ProfileReportMaybe(void) {
+         double total = game + present;
+         double maxGame = sProfMaxGameNs / 1e6;
+         double maxPresent = sProfMaxPresentNs / 1e6;
++#ifdef TMC_VITA
++        {
++            extern void TmcVita_LogStatus(void);
++            TmcVita_LogStatus();
++        }
++#endif
+         fprintf(stderr,
+                 "[profile] %u frames: game=%.3f present=%.3f (render=%.3f) ms | "
+                 "%.0f fps uncapped | worst: game=%.2f present=%.2f ms | presents=%u\n",
+@@ -721,6 +731,9 @@ static void Port_ProfileReportMaybe(void) {
  
  int Port_Profile_Enabled(void) {
      static int en = -1;
@@ -311,6 +296,34 @@ index 0fd1133..f2d6c10 100644
  #include <execinfo.h>
  #define PORT_HAVE_EXECINFO 1
  #else
+diff --git a/port/port_imgui_menu.cpp b/port/port_imgui_menu.cpp
+index 7faa3cf..b2c1e73 100644
+--- a/port/port_imgui_menu.cpp
++++ b/port/port_imgui_menu.cpp
+@@ -729,7 +729,11 @@ static void DrawRibbon(void) {
+             Port_Config_SetRibbonEnabled(useRibbon); /* persist (#146) */
+         }
+         ImGui::SameLine();
++#ifdef TMC_VITA
++        ImGui::TextDisabled("(Select+Start also toggles)");
++#else
+         ImGui::TextDisabled("(F8 or Select+Start also toggles)");
++#endif
+         ImGui::TextDisabled("F5/F6 quicksave/load   F9 bug report   -   see the Controls tab for all hotkeys");
+     }
+     ImGui::End();
+@@ -1033,7 +1037,11 @@ static void DrawMenuTrigger(void) {
+         /* Closed: single triple-bar ASCII '=' stacked into a hamburger
+          * shape (the default ImGui font doesn't ship U+2261 ≡). First run:
+          * spelled-out "Settings (F8)". Open: clear close label. */
++#ifdef TMC_VITA
++        const char* label = open ? " CLOSE MENU " : (showHint ? " Settings  (SELECT+START) " : "[=]");
++#else
+         const char* label = open ? " CLOSE MENU " : (showHint ? " Settings  (F8) " : "[=]");
++#endif
+         if (ImGui::Button(label)) {
+             Port_DebugMenu_Toggle();
+         }
 diff --git a/port/port_imgui_randomizer_tab.inc b/port/port_imgui_randomizer_tab.inc
 index b2e70e1..11efc7f 100644
 --- a/port/port_imgui_randomizer_tab.inc
@@ -331,22 +344,10 @@ index b2e70e1..11efc7f 100644
      } else {
          ImGui::TextDisabled("Glitch tricks are selectable when Glitchless logic is OFF.");
 diff --git a/port/port_m4a_backend.cpp b/port/port_m4a_backend.cpp
-index 23326ed..9693e8c 100644
+index 23326ed..c735eb7 100644
 --- a/port/port_m4a_backend.cpp
 +++ b/port/port_m4a_backend.cpp
-@@ -102,7 +102,11 @@ struct BackendState {
-     /* GBA-accurate audio toggle (F8 → Audio). false = enhanced (BLEP/BLAMP); true =
-      * NEAREST sample-and-hold + no forced reverb. Read by MakeAgbplayMode when
-      * the context is (re)built, and mutated live by SetGbaAccurate. */
-+#ifdef TMC_VITA
-+    bool gbaAccurate = true; /* matches port_audio.c's default on the Vita */
-+#else
-     bool gbaAccurate = false;
-+#endif
-     /* Forced PCM-reverb level byte (F8 → Audio "Reverb"). 0x00 = OFF (dry —
-      * ships unchanged). When enabled it is (0x80 | level), level 1..0x7F; the
-      * 0x80 REV_MASK_SET bit is what actually engages SoundMixer::GetReverbLevel
-@@ -650,7 +654,7 @@ static void RenderChunkLocked(void) {
+@@ -650,7 +650,7 @@ static void RenderChunkLocked(void) {
                  const auto& track = player.tracks[trackIndex];
                  const float gain = static_cast<float>(sState.trackVolumes[playerIndex][trackIndex]) / 255.0f;
  
@@ -409,6 +410,34 @@ index 40989b9..bc3c267 100644
      return a >= 0x10000ULL && a < 0x800000000000ULL;
  #else
      return a > 0xFFFFFFFFULL && a < 0x1000000000000ULL;
+diff --git a/port/port_runtime_config.cpp b/port/port_runtime_config.cpp
+index c52a99f..097e9e6 100644
+--- a/port/port_runtime_config.cpp
++++ b/port/port_runtime_config.cpp
+@@ -370,7 +370,11 @@ nlohmann::json DefaultsJson(void) {
+     j["autosave_interval_ms"] = 60000;
+     j["touch_scheme"] = "joystick";
+     j["aspect_mode"] = "native";
++#ifdef TMC_VITA
++    j["bg_fill"] = "black"; /* plain black bars beside 3:2 scenes on the Vita */
++#else
+     j["bg_fill"] = "blurred";
++#endif
+     j["bg_fill_color"] = { 0, 0, 0 };
+     j["render_backend"] = "auto";
+     /* reborn_features is intentionally absent — its presence is the signal
+@@ -748,7 +752,11 @@ extern "C" void Port_Config_Load(const char* path) {
+             else
+                 sAspectMode = PORT_ASPECT_NATIVE_3_2;
+ 
++#ifdef TMC_VITA
++            std::string bf = JsonValue(j, "bg_fill", std::string("black"));
++#else
+             std::string bf = JsonValue(j, "bg_fill", std::string("blurred"));
++#endif
+             for (char& c : bf) {
+                 if (c >= 'A' && c <= 'Z')
+                     c = static_cast<char>(c - 'A' + 'a');
 diff --git a/port/port_stubs.c b/port/port_stubs.c
 index b20c88d..b7f3b1c 100644
 --- a/port/port_stubs.c
@@ -474,6 +503,23 @@ index f654347..fca2506 100644
  PORT_STATIC_ASSERT(sizeof(void*) == 8, "PC port targets 64-bit systems only");
  #endif
  
+diff --git a/port/ppu/src/mode1.c b/port/ppu/src/mode1.c
+index f1022b7..5526ce5 100644
+--- a/port/ppu/src/mode1.c
++++ b/port/ppu/src/mode1.c
+@@ -341,8 +341,10 @@ void virtuappu_mode1_get_bound_gba_memory(VirtuaPPUMode1GbaMemory* memory) {
+  * threads while still seeing the correct HDMA-mutated register state
+  * (BG SCROLL, BLDY, etc.) for that scanline. NULL on the main / setup
+  * thread keeps the existing single-threaded behavior intact. */
+-#ifdef TMC_N64
+-/* N64: single-threaded (no OpenMP) and bare-metal (no TLS). __thread compiles to
++#if defined(TMC_N64) || defined(TMC_VITA)
++/* Vita: the render is single-threaded too, and __thread data isn't set up
++ * for the Vita's executables (no TLS segment support in vita-elf-create).
++ * N64: single-threaded (no OpenMP) and bare-metal (no TLS). __thread compiles to
+  * RDHWR $29, which the VR4300 (MIPS III) doesn't implement -> Reserved Instruction.
+  * Single-threaded rendering makes plain file-scope storage correct here. */
+ #define VPPU_TLS
 diff --git a/src/collision.c b/src/collision.c
 index 7b181b8..ebc0366 100644
 --- a/src/collision.c

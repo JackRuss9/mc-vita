@@ -84,3 +84,17 @@
 - Start skips the opening storybook (cutscene.c, states 1-10 -> 11).
 - Open: black screen in gameplay after the story (game running: autosaves,
   area changes); visual glitches on the file select and story pages.
+
+## Third play (3d34e0e)
+- Sound fixed: with idle tracks skipped the synth takes ~0.3 ms per 21 ms
+  buffer (was 35-48). Back to Picori's defaults (48 kHz, enhanced mode).
+- One present per tick: smooth to the eye, but the PPU render is ~22 ms a
+  frame (the old ~3 ms was averaged over the skipped presents) -> ~25-30 fps.
+  Next big item. First step: the PPU's __thread scratch (VPPU_TLS) made
+  plain on the Vita like on the N64 (single-threaded render; no TLS segment
+  in Vita executables).
+- Still: no sprites on the file select (slots, cursor, Link), black after
+  the story. [status] line next to each [profile]: task/state, fade, display
+  registers, visible OAM count.
+- Settings button label: Select+Start (already Picori's gamepad toggle).
+- bg_fill default black on the Vita.
