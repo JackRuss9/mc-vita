@@ -167,16 +167,25 @@ bool TmcVita_SwallowKey(int scancode) {
         sKeyboardClosedMs = SDL_GetTicks(); /* the keyboard is closing */
         return true;
     }
-    return sKeyboardClosedMs != 0 && SDL_GetTicks() - sKeyboardClosedMs < 500;
+    return sKeyboardClosedMs != 0 && SDL_GetTicks() - sKeyboardClosedMs < 700;
 }
 
 static void PollKeyboardClosed(void);
+
+/* While the Vita keyboard is open (and a moment after it closes) the buttons
+ * pressed in it also reached the settings menu's gamepad navigation: D-pad
+ * and L/R moved through the menu and Cross pressed buttons there ("Unlock
+ * all items", "Change name..." again). The menu ignores the gamepad then. */
+bool TmcVita_KeyboardBusy(void) {
+    PollKeyboardClosed();
+    return sWaitingName || (sKeyboardClosedMs != 0 && SDL_GetTicks() - sKeyboardClosedMs < 700);
+}
 
 void TmcVita_RequestNameChange(void) {
     /* asked again while the keyboard is closed: the last one ended empty */
     if (sWaitingName && !(sKeyboardWindow != NULL && SDL_ScreenKeyboardShown(sKeyboardWindow)))
         sWaitingName = false;
-    if (sWaitingName || (sKeyboardClosedMs != 0 && SDL_GetTicks() - sKeyboardClosedMs < 500))
+    if (sWaitingName || (sKeyboardClosedMs != 0 && SDL_GetTicks() - sKeyboardClosedMs < 700))
         return;
     SDL_Window* window = SDL_GetKeyboardFocus();
     if (window == NULL) {

@@ -30,6 +30,7 @@ const char* TmcVita_CheatHelp(int id);
 void TmcVita_RequestNameChange(void);
 bool TmcVita_OnTextInput(const char* text);
 bool TmcVita_SwallowKey(int scancode);
+bool TmcVita_KeyboardBusy(void);
 const char* TmcVita_NameStatus(void);
 const char* TmcVita_CurrentName(void);
 /* once per frame (port_bios.c): the "always full" cheats */

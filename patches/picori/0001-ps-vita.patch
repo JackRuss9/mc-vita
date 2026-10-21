@@ -249,10 +249,10 @@ index b18768c..2ab0b74 100644
      if (sAudioStream == NULL) {
          SDL_Log("Port_Audio_Init: SDL_OpenAudioDeviceStream failed: %s", SDL_GetError());
 diff --git a/port/port_bios.c b/port/port_bios.c
-index a1cd2a9..b1f736a 100644
+index a1cd2a9..3b39d81 100644
 --- a/port/port_bios.c
 +++ b/port/port_bios.c
-@@ -224,6 +224,19 @@ static void Port_UpdateInput(void) {
+@@ -224,6 +224,25 @@ static void Port_UpdateInput(void) {
  static void Port_PumpEvents(void) {
      SDL_Event e;
      while (SDL_PollEvent(&e)) {
@@ -261,6 +261,12 @@ index a1cd2a9..b1f736a 100644
 +        if (e.type == SDL_EVENT_TEXT_INPUT) {
 +            extern bool TmcVita_OnTextInput(const char* text);
 +            if (TmcVita_OnTextInput(e.text.text))
++                continue;
++        }
++        if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || e.type == SDL_EVENT_GAMEPAD_BUTTON_UP ||
++            e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
++            extern bool TmcVita_KeyboardBusy(void);
++            if (TmcVita_KeyboardBusy())
 +                continue;
 +        }
 +        if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) {
@@ -272,7 +278,7 @@ index a1cd2a9..b1f736a 100644
          /* Forward every event to ImGui so its window/keyboard tracking
           * stays in sync. ImGui only consumes input when a widget is
           * actively hovered/focused; game input passes through. */
-@@ -471,6 +484,27 @@ static void Port_PumpEvents(void) {
+@@ -471,6 +490,27 @@ static void Port_PumpEvents(void) {
           * on both up and down edges so a release-and-re-press re-arms.
           * The toggle fires once on the down-edge of whichever button
           * completes the pair. */
@@ -300,7 +306,7 @@ index a1cd2a9..b1f736a 100644
          {
              static bool s_select_held = false, s_start_held = false;
              const bool is_down = (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
-@@ -656,6 +690,10 @@ static bool Port_PacingForceLegacy(void) {
+@@ -656,6 +696,10 @@ static bool Port_PacingForceLegacy(void) {
           * they need the one-rasterization-per-tick coupling. Pin them to the
           * legacy loop so their outputs stay comparable across versions.
           * TMC_LEGACY_PACING is the manual escape hatch. */
@@ -311,7 +317,7 @@ index a1cd2a9..b1f736a 100644
          f = (getenv("TMC_CAPTURE_FRAME") || getenv("TMC_PERFCAP") || getenv("TMC_ROOMCAP") ||
               getenv("TMC_LEGACY_PACING"))
                  ? 1
-@@ -706,6 +744,12 @@ static void Port_ProfileReportMaybe(void) {
+@@ -706,6 +750,12 @@ static void Port_ProfileReportMaybe(void) {
          double total = game + present;
          double maxGame = sProfMaxGameNs / 1e6;
          double maxPresent = sProfMaxPresentNs / 1e6;
@@ -324,7 +330,7 @@ index a1cd2a9..b1f736a 100644
          fprintf(stderr,
                  "[profile] %u frames: game=%.3f present=%.3f (render=%.3f) ms | "
                  "%.0f fps uncapped | worst: game=%.2f present=%.2f ms | presents=%u\n",
-@@ -721,6 +765,9 @@ static void Port_ProfileReportMaybe(void) {
+@@ -721,6 +771,9 @@ static void Port_ProfileReportMaybe(void) {
  
  int Port_Profile_Enabled(void) {
      static int en = -1;
@@ -334,7 +340,7 @@ index a1cd2a9..b1f736a 100644
      if (en < 0) {
          const char* e = getenv("TMC_PROFILE");
          if (e && *e && e[0] != '0') {
-@@ -745,6 +792,13 @@ void VBlankIntrWait(void) {
+@@ -745,6 +798,13 @@ void VBlankIntrWait(void) {
      u64 nowNs;
      bool decoupled;
  
@@ -464,7 +470,7 @@ index 0fd1133..f2d6c10 100644
  #define PORT_HAVE_EXECINFO 1
  #else
 diff --git a/port/port_imgui_menu.cpp b/port/port_imgui_menu.cpp
-index 7faa3cf..4f7534c 100644
+index 7faa3cf..872f238 100644
 --- a/port/port_imgui_menu.cpp
 +++ b/port/port_imgui_menu.cpp
 @@ -489,6 +489,30 @@ void Port_Practice_TogglePause(void);
@@ -535,6 +541,18 @@ index 7faa3cf..4f7534c 100644
          if (ImGui::Button(label)) {
              Port_DebugMenu_Toggle();
          }
+@@ -1321,7 +1359,11 @@ extern "C" bool Port_ImGui_Render(void) {
+      * game's KEYINPUT is masked by port_bios.c. */
+     static bool sPrevMenuOpen = false;
+     const bool menuOpen = Port_DebugMenu_IsOpen();
++#ifdef TMC_VITA
++    const bool navWanted = (menuOpen || Port_RandoFileMenu_IsOpen()) && !TmcVita_KeyboardBusy();
++#else
+     const bool navWanted = menuOpen || Port_RandoFileMenu_IsOpen();
++#endif
+     {
+         ImGuiIO& io = ImGui::GetIO();
+         if (navWanted) {
 diff --git a/port/port_imgui_randomizer_tab.inc b/port/port_imgui_randomizer_tab.inc
 index b2e70e1..11efc7f 100644
 --- a/port/port_imgui_randomizer_tab.inc
