@@ -49,3 +49,15 @@
   mutex (made through pthread_once) was never made. vita_guard.cpp replaces
   the three __cxa_guard functions (--wrap) with a recursive Vita kernel
   mutex; the self-test logs whether pthread_once runs its routine.
+
+## First play (896eeaf)
+- Extraction took 2 h 40 min on the memory card (sweep 90 min, sprites 25,
+  areas 23, palettes 16): thousands of small files (assets_src/, rom_data/).
+  To cut before the EU version (runtime-only extraction).
+- rom_data/ off on the Vita (2789 page files read at every start, written on
+  the first; the ROM is required anyway).
+- Profiling on ([profile] every 120 frames) and the audio report once a
+  second while tuning; audio: GBA-accurate mode (NEAREST resampling, no
+  post-process) and a 2048-frame buffer by default.
+- Title screen pillarboxed to 3:2 with the "blurred" side fill (Picori's
+  default bg_fill); true widescreen only in gameplay (TASK_GAME).

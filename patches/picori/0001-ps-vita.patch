@@ -105,6 +105,59 @@ index 307540f..6715a7d 100644
  #else
      int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
      if (fd < 0) {
+diff --git a/port/port_audio.c b/port/port_audio.c
+index b18768c..a961149 100644
+--- a/port/port_audio.c
++++ b/port/port_audio.c
+@@ -22,7 +22,11 @@ static SDL_AudioStream* sAudioStream;
+  * false→true edge (see Port_Audio_SetGbaAccurate), there is a happens-before
+  * edge guaranteeing the audio thread has already observed accurate==true and
+  * stopped touching the filter statics. */
++#ifdef TMC_VITA
++static bool sGbaAccurate = true; /* NEAREST resampling, no post-process: lighter on the Vita's CPU */
++#else
+ static bool sGbaAccurate = false;
++#endif
+ 
+ /* Mid/side widen gain for post-process stage 2 (F8 → Audio "Stereo width").
+  * Default 1.20 = the long-standing shipped image. Written on the main thread,
+@@ -156,7 +160,11 @@ static void Port_Audio_Feed(void* userdata, SDL_AudioStream* stream, int additio
+     int remaining = additional_amount;
+     (void)userdata;
+     (void)total_amount;
++#ifdef TMC_VITA
++    const bool trace = true; /* once-per-second report in log.txt while tuning */
++#else
+     const bool trace = (Port_DebugVerbose || getenv("TMC_AUDIO_TRACE"));
++#endif
+     /* Trace statics (see below); also used to report render work-time. */
+     static Uint64 sLastCbNs = 0, sWindowNs = 0;
+     static double sMaxGap = 0.0, sReqMs = 0.0, sMaxWorkMs = 0.0, sSumWorkMs = 0.0;
+@@ -284,6 +292,10 @@ bool Port_Audio_Init(void) {
+             fclose(mf);
+         }
+     }
++#ifdef TMC_VITA
++    if (frames == 0)
++        frames = 2048; /* ~43 ms: slack for the Vita's slower cores */
++#endif
+     if (frames == 0) {
+         /* No override: pick a default from the CPU's top clock. Read the highest
+          * cpuinfo_max_freq across cores; a weak in-order-class cluster (< 1.8 GHz)
+diff --git a/port/port_bios.c b/port/port_bios.c
+index a1cd2a9..5772bc9 100644
+--- a/port/port_bios.c
++++ b/port/port_bios.c
+@@ -721,6 +721,9 @@ static void Port_ProfileReportMaybe(void) {
+ 
+ int Port_Profile_Enabled(void) {
+     static int en = -1;
++#ifdef TMC_VITA
++    en = 1; /* frame timings in log.txt while the Vita port is being tuned */
++#endif
+     if (en < 0) {
+         const char* e = getenv("TMC_PROFILE");
+         if (e && *e && e[0] != '0') {
 diff --git a/port/port_exe_path.cpp b/port/port_exe_path.cpp
 index 74dd4d8..719113e 100644
 --- a/port/port_exe_path.cpp
@@ -161,6 +214,59 @@ index b2e70e1..11efc7f 100644
              changed = true;
      } else {
          ImGui::TextDisabled("Glitch tricks are selectable when Glitchless logic is OFF.");
+diff --git a/port/port_m4a_backend.cpp b/port/port_m4a_backend.cpp
+index 23326ed..430dac0 100644
+--- a/port/port_m4a_backend.cpp
++++ b/port/port_m4a_backend.cpp
+@@ -102,7 +102,11 @@ struct BackendState {
+     /* GBA-accurate audio toggle (F8 → Audio). false = enhanced (BLEP/BLAMP); true =
+      * NEAREST sample-and-hold + no forced reverb. Read by MakeAgbplayMode when
+      * the context is (re)built, and mutated live by SetGbaAccurate. */
++#ifdef TMC_VITA
++    bool gbaAccurate = true; /* matches port_audio.c's default on the Vita */
++#else
+     bool gbaAccurate = false;
++#endif
+     /* Forced PCM-reverb level byte (F8 → Audio "Reverb"). 0x00 = OFF (dry —
+      * ships unchanged). When enabled it is (0x80 | level), level 1..0x7F; the
+      * 0x80 REV_MASK_SET bit is what actually engages SoundMixer::GetReverbLevel
+diff --git a/port/port_rom.c b/port/port_rom.c
+index f36577b..f0e618f 100644
+--- a/port/port_rom.c
++++ b/port/port_rom.c
+@@ -204,6 +204,12 @@ static void ExtractPage(u32 page) {
+     if (IsPageExtracted(page))
+         return;
+ 
++#ifdef TMC_VITA
++    /* No rom_data/ on the Vita: the ROM is required anyway, and thousands
++     * of 4 KB files on the memory card made every start slow. */
++    MarkPageExtracted(page);
++    return;
++#endif
+     u32 offset = page << ROM_PAGE_SHIFT;
+     u32 size = ROM_PAGE_SIZE;
+     if (offset + size > gRomSize)
+@@ -374,6 +380,9 @@ static int LoadExtractedPagesFrom(const char* dir) {
+ 
+ /* Try multiple rom_data directories and return total pages loaded */
+ static int LoadExtractedPages(void) {
++#ifdef TMC_VITA
++    return 0; /* see ExtractPage */
++#endif
+     const char* dirs[] = {
+         ROM_EXTRACT_DIR,  /* rom_data/ (cwd) */
+         "../../rom_data", /* project root from build/pc/ */
+@@ -1798,7 +1807,9 @@ void Port_LoadRom(const char* path) {
+     }
+ 
+     /* ---- Extract all known ROM regions to rom_data/ ---- */
++#ifndef TMC_VITA
+     EnsureExtractDir();
++#endif
+ 
+     /* ROM header (for game code verification) */
+     ExtractRegion(0, 0x200);
 diff --git a/port/port_stubs.c b/port/port_stubs.c
 index b20c88d..b7f3b1c 100644
 --- a/port/port_stubs.c
