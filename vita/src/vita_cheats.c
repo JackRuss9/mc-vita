@@ -154,12 +154,19 @@ static char sNameStatus[64];
  * the keyboard again. That Enter is dropped (TmcVita_SwallowKey) and the
  * button ignored for a moment. */
 static Uint64 sKeyboardClosedMs;
+static Uint64 sKeyboardHiddenSinceMs;
+static SDL_Window* sKeyboardWindow;
 
 bool TmcVita_SwallowKey(int scancode) {
     return scancode == SDL_SCANCODE_RETURN && sKeyboardClosedMs != 0 && SDL_GetTicks() - sKeyboardClosedMs < 500;
 }
 
+static void PollKeyboardClosed(void);
+
 void TmcVita_RequestNameChange(void) {
+    /* asked again while the keyboard is closed: the last one ended empty */
+    if (sWaitingName && !(sKeyboardWindow != NULL && SDL_ScreenKeyboardShown(sKeyboardWindow)))
+        sWaitingName = false;
     if (sWaitingName || (sKeyboardClosedMs != 0 && SDL_GetTicks() - sKeyboardClosedMs < 500))
         return;
     SDL_Window* window = SDL_GetKeyboardFocus();
@@ -170,6 +177,8 @@ void TmcVita_RequestNameChange(void) {
             window = windows[0];
         SDL_free(windows);
     }
+    sKeyboardWindow = window;
+    sKeyboardHiddenSinceMs = 0;
     if (window == NULL || !SDL_StartTextInput(window)) {
         snprintf(sNameStatus, sizeof sNameStatus, "Keyboard unavailable");
         return;
@@ -185,7 +194,7 @@ bool TmcVita_OnTextInput(const char* text) {
         return false;
     sWaitingName = false;
     sKeyboardClosedMs = SDL_GetTicks();
-    SDL_StopTextInput(SDL_GetKeyboardFocus());
+    SDL_StopTextInput(sKeyboardWindow);
     u8 name[FILENAME_LENGTH];
     int n = 0;
     memset(name, 0, sizeof name);
@@ -205,7 +214,31 @@ bool TmcVita_OnTextInput(const char* text) {
     return true;
 }
 
+/* The keyboard closed with nothing typed (empty, or cancelled): SDL sends no
+ * text then, so notice the closed keyboard instead, after a short grace so a
+ * text event still in the queue is taken first. */
+static void PollKeyboardClosed(void) {
+    if (!sWaitingName)
+        return;
+    if (sKeyboardWindow != NULL && SDL_ScreenKeyboardShown(sKeyboardWindow)) {
+        sKeyboardHiddenSinceMs = 0;
+        return;
+    }
+    const Uint64 now = SDL_GetTicks();
+    if (sKeyboardHiddenSinceMs == 0) {
+        sKeyboardHiddenSinceMs = now;
+        return;
+    }
+    if (now - sKeyboardHiddenSinceMs >= 300) {
+        sWaitingName = false;
+        sKeyboardClosedMs = now;
+        SDL_StopTextInput(sKeyboardWindow);
+        snprintf(sNameStatus, sizeof sNameStatus, "Name unchanged");
+    }
+}
+
 const char* TmcVita_NameStatus(void) {
+    PollKeyboardClosed(); /* drawn every frame while the Cheats tab is open */
     return sNameStatus;
 }
 
