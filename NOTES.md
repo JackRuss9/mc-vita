@@ -147,3 +147,15 @@
   read + one row fetch per 8 px); composite fast path for lines without
   windows, colour effects or semi-transparent OBJ.
 - [ppu] line: bg/obj/composite time of the main thread's third of the lines.
+
+## Round 3 (31c341e): ~55-60 fps in gameplay
+- Wide rooms: render ~5 ms (bg ~2.3, obj ~0.4, composite ~0.6 on the main
+  thread's third). File select ~28 fps: "menu art background" draws the side
+  art as thousands of ImGui rectangles a frame (overlay 10-15 ms) -> off by
+  default on the Vita. F8 menu open: ~8-11 ms of ImGui.
+- Cheats (vita/src/vita_cheats.c, Settings -> Cheats tab, cheats.txt):
+  health/arrows/bombs/rupees don't decrease (blocked in ModHealth/ModArrows/
+  ModBombs/ModRupees), wallet full, regular kinstones 0x6E-0x75 at 99 (with
+  the bag), shells 999.
+- Warp tab: areas with 1-2 rooms left a SameLine pending, the next header
+  drew over the buttons.

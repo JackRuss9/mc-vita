@@ -249,7 +249,7 @@ index b18768c..2ab0b74 100644
      if (sAudioStream == NULL) {
          SDL_Log("Port_Audio_Init: SDL_OpenAudioDeviceStream failed: %s", SDL_GetError());
 diff --git a/port/port_bios.c b/port/port_bios.c
-index a1cd2a9..1a8761c 100644
+index a1cd2a9..7764dc4 100644
 --- a/port/port_bios.c
 +++ b/port/port_bios.c
 @@ -471,6 +471,27 @@ static void Port_PumpEvents(void) {
@@ -314,6 +314,20 @@ index a1cd2a9..1a8761c 100644
      if (en < 0) {
          const char* e = getenv("TMC_PROFILE");
          if (e && *e && e[0] != '0') {
+@@ -745,6 +779,13 @@ void VBlankIntrWait(void) {
+     u64 nowNs;
+     bool decoupled;
+ 
++#ifdef TMC_VITA
++    {
++        extern void TmcVita_Cheats_Frame(void);
++        TmcVita_Cheats_Frame();
++    }
++#endif
++
+     /* Practice-mode pause: hold the engine here, presenting and pumping
+      * events only (no Port_UpdateInput, so the game state can't advance),
+      * until unpaused or a single frame-advance step is requested. The F8
 diff --git a/port/port_draw.c b/port/port_draw.c
 index 630d56d..4580be4 100644
 --- a/port/port_draw.c
@@ -430,10 +444,45 @@ index 0fd1133..f2d6c10 100644
  #define PORT_HAVE_EXECINFO 1
  #else
 diff --git a/port/port_imgui_menu.cpp b/port/port_imgui_menu.cpp
-index 7faa3cf..b20ec5d 100644
+index 7faa3cf..a66eacc 100644
 --- a/port/port_imgui_menu.cpp
 +++ b/port/port_imgui_menu.cpp
-@@ -729,7 +729,11 @@ static void DrawRibbon(void) {
+@@ -489,6 +489,21 @@ void Port_Practice_TogglePause(void);
+ extern "C" void Port_DebugMenu_ToastFromExternal(const char* msg);
+ 
+ #include "port_imgui_items_tab.inc"
++#ifdef TMC_VITA
++#include "vita_cheats.h"
++/* Vita: the in-game cheats (vita/src/vita_cheats.c) */
++static void DrawVitaCheatsTab(void) {
++    ImGui::TextDisabled("Remembered between sessions (ux0:data/tmc/cheats.txt).");
++    ImGui::Spacing();
++    for (int i = 0; i < TMC_CHEAT_COUNT; i++) {
++        bool on = TmcVita_Cheat(i);
++        if (ImGui::Checkbox(TmcVita_CheatName(i), &on))
++            TmcVita_SetCheat(i, on);
++        ImGui::SameLine();
++        ImGui::TextDisabled("%s", TmcVita_CheatHelp(i));
++    }
++}
++#endif
+ 
+ #include "port_imgui_flags_tab.inc"
+ 
+@@ -641,6 +656,12 @@ static void DrawRibbon(void) {
+         ImGui::PopStyleColor(3);
+ 
+         if (ImGui::BeginTabBar("##ribbonTabs", ImGuiTabBarFlags_None)) {
++#ifdef TMC_VITA
++            if (ImGui::BeginTabItem("Cheats")) {
++                DrawVitaCheatsTab();
++                ImGui::EndTabItem();
++            }
++#endif
+             if (ImGui::BeginTabItem("Items")) {
+                 DrawRibbonItemsTab();
+                 ImGui::EndTabItem();
+@@ -729,7 +750,11 @@ static void DrawRibbon(void) {
              Port_Config_SetRibbonEnabled(useRibbon); /* persist (#146) */
          }
          ImGui::SameLine();
@@ -445,7 +494,7 @@ index 7faa3cf..b20ec5d 100644
          ImGui::TextDisabled("F5/F6 quicksave/load   F9 bug report   -   see the Controls tab for all hotkeys");
      }
      ImGui::End();
-@@ -1033,7 +1037,11 @@ static void DrawMenuTrigger(void) {
+@@ -1033,7 +1058,11 @@ static void DrawMenuTrigger(void) {
          /* Closed: single triple-bar ASCII '=' stacked into a hamburger
           * shape (the default ImGui font doesn't ship U+2261 ≡). First run:
           * spelled-out "Settings (F8)". Open: clear close label. */
@@ -476,6 +525,22 @@ index b2e70e1..11efc7f 100644
              changed = true;
      } else {
          ImGui::TextDisabled("Glitch tricks are selectable when Glitchless logic is OFF.");
+diff --git a/port/port_imgui_warp_tab.inc b/port/port_imgui_warp_tab.inc
+index 7a77ba9..09841b8 100644
+--- a/port/port_imgui_warp_tab.inc
++++ b/port/port_imgui_warp_tab.inc
+@@ -216,6 +216,11 @@ static void DrawRibbonWarpTab(void) {
+                         ImGui::SameLine();
+                     col++;
+                 }
++                /* The last button leaves a SameLine pending when the row isn't
++                 * full; end it so the next header starts on its own line
++                 * (areas with 1-2 rooms drew the next header over them). */
++                if ((col % 3) != 0)
++                    ImGui::NewLine();
+                 ImGui::Unindent();
+             }
+             ImGui::PopID();
 diff --git a/port/port_m4a_backend.cpp b/port/port_m4a_backend.cpp
 index 23326ed..8c2a470 100644
 --- a/port/port_m4a_backend.cpp
@@ -665,10 +730,24 @@ index 40989b9..bc3c267 100644
  #else
      return a > 0xFFFFFFFFULL && a < 0x1000000000000ULL;
 diff --git a/port/port_runtime_config.cpp b/port/port_runtime_config.cpp
-index c52a99f..097e9e6 100644
+index c52a99f..f5de0c1 100644
 --- a/port/port_runtime_config.cpp
 +++ b/port/port_runtime_config.cpp
-@@ -370,7 +370,11 @@ nlohmann::json DefaultsJson(void) {
+@@ -303,7 +303,13 @@ const BoolCfg kBoolCfg[] = {
+     { "menu_hint_seen", &sMenuHintSeen, false },
+     { "hold_advance_text", &sHoldAdvanceText, false },
+     { "hd_dialogue", &sHdDialogue, false },
++#ifdef TMC_VITA
++    /* Vita: off — it draws the side art as thousands of rectangles a frame
++     * (file select ~28 fps with it on) */
++    { "menu_art_background", &sMenuArtBackground, false },
++#else
+     { "menu_art_background", &sMenuArtBackground, true },
++#endif
+     { "roll_attack_macro", &sRollAttackMacroEnabled, true },
+     { "fullscreen", &sFullscreen, false },
+     { "fullscreen_hide_cursor", &sFullscreenHideCursor, true },
+@@ -370,7 +376,11 @@ nlohmann::json DefaultsJson(void) {
      j["autosave_interval_ms"] = 60000;
      j["touch_scheme"] = "joystick";
      j["aspect_mode"] = "native";
@@ -680,7 +759,7 @@ index c52a99f..097e9e6 100644
      j["bg_fill_color"] = { 0, 0, 0 };
      j["render_backend"] = "auto";
      /* reborn_features is intentionally absent — its presence is the signal
-@@ -748,7 +752,11 @@ extern "C" void Port_Config_Load(const char* path) {
+@@ -748,7 +758,11 @@ extern "C" void Port_Config_Load(const char* path) {
              else
                  sAspectMode = PORT_ASPECT_NATIVE_3_2;
  
@@ -2418,6 +2497,70 @@ index b33763a..88159c4 100644
              ClearDeletedEntity(&ent->base);
          }
      } while (ent++, ent < (((GenericEntity*)&gPlayerEntity.base) + 80));
+diff --git a/src/gameUtils.c b/src/gameUtils.c
+index 586874f..288ac78 100644
+--- a/src/gameUtils.c
++++ b/src/gameUtils.c
+@@ -311,6 +311,13 @@ s32 ModHealth(s32 delta) {
+     }
+ #endif
+ 
++#ifdef TMC_VITA
++    {
++        extern bool TmcVita_Cheat(int id);
++        if (delta < 0 && TmcVita_Cheat(0 /* TMC_CHEAT_HEALTH */))
++            delta = 0;
++    }
++#endif
+     newHealth = stats->health + delta;
+     if (newHealth < 0) {
+         newHealth = 0;
+@@ -327,6 +334,13 @@ void ModRupees(s32 delta) {
+     s32 newRupeeCount;
+     Stats* s = &gSave.stats;
+ 
++#ifdef TMC_VITA
++    {
++        extern bool TmcVita_Cheat(int id);
++        if (delta < 0 && TmcVita_Cheat(3 /* TMC_CHEAT_RUPEES */))
++            delta = 0;
++    }
++#endif
+     newRupeeCount = s->rupees + delta;
+     if (newRupeeCount < 0) {
+         newRupeeCount = 0;
+diff --git a/src/itemUtils.c b/src/itemUtils.c
+index c432aab..263f582 100644
+--- a/src/itemUtils.c
++++ b/src/itemUtils.c
+@@ -272,6 +272,13 @@ void ModShells(s32 shells) {
+ void ModBombs(s32 bombs) {
+     s32 bombCount = bombs;
+     s32 bagSize;
++#ifdef TMC_VITA
++    {
++        extern bool TmcVita_Cheat(int id);
++        if (bombs < 0 && TmcVita_Cheat(2 /* TMC_CHEAT_BOMBS */))
++            bombs = bombCount = 0;
++    }
++#endif
+     bombCount += gSave.stats.bombCount;
+     bagSize = gBombBagSizes[gSave.stats.bombBagType];
+     if (bombCount < 0) {
+@@ -285,6 +292,13 @@ void ModBombs(s32 bombs) {
+ void ModArrows(s32 arrows) {
+     s32 quiverSize;
+     s32 arrowCount = arrows;
++#ifdef TMC_VITA
++    {
++        extern bool TmcVita_Cheat(int id);
++        if (arrows < 0 && TmcVita_Cheat(1 /* TMC_CHEAT_ARROWS */))
++            arrowCount = 0;
++    }
++#endif
+     arrowCount += gSave.stats.arrowCount;
+     quiverSize = gQuiverSizes[gSave.stats.quiverType];
+     if (arrowCount < 0) {
 diff --git a/src/projectile/ballAndChain.c b/src/projectile/ballAndChain.c
 index d691aa4..651cc71 100644
 --- a/src/projectile/ballAndChain.c
