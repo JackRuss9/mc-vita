@@ -173,3 +173,37 @@
   so the read included 2 bytes of padding and matched only sometimes. Compare
   e.key.key (SDL_Keycode, a Uint32) instead. Rule: never read SDL enum-typed
   event fields in our code; use the plain integer ones.
+
+## v1.0.1 fixes (patches/picori/0002-v1.0.1-fixes.patch)
+- Frame drops with "game" at 30-55 ms (Crenel Minish path to Melari's mine,
+  Veil Falls top with Biggoron, busy sprite scenes): every DMA / CpuSet /
+  animation-frame read calls Port_IsLoadedAssetBytes, which walked the whole
+  binaryFiles hash map (thousands of cached blobs, a few cache misses each:
+  ~1 ms a call on the Vita). That map only grows and its blobs never move, so
+  a sorted [begin, end) table rebuilt when its size changes is binary-searched
+  instead (also for Port_LoadedAssetBytesEnd).
+- PPU: scanlines are taken from a shared counter instead of fixed thirds. The
+  workers share their cores with the audio mixer (up to ~11 ms per 23 ms
+  buffer in the storm) and system threads; with fixed thirds the main thread
+  waited for them (render ~13 ms against ~7 ms of its own lines). The [ppu]
+  line still samples every third line, now from whichever thread drew it.
+- Rain on Mt Crenel, then pause menu and back: the room became a mess of
+  tiles. RestoreGameTask's port addition forced gBG1Buffer/gBG2Buffer into
+  VRAM for BG1 and BG2; in the storm BG1 is the rain, whose tilemap the room
+  loads straight into VRAM (WeatherChangeManager), so the menu's own tilemap
+  left in gBG1Buffer was copied over it. Now only layers that show a map
+  (gMapTop/gMapBottom) or that a manager feeds from its own buffer are copied.
+- Biggoron (Veil Falls top) at 282 px: his BG1 slice ended at x = 240 (no
+  widescreen reveal for BG1, WIN1 clamped to the native width) and the right
+  side showed a block of his lower body under a black notch. The reveal now
+  continues his body tilemap (gUnk_02006F00, from the column bigGoron.c
+  publishes) and WIN1 reaches the frame's edge while it does
+  (virtuappu_mode1_ws_win1_extend).
+- Crash after loading a save state (data abort, Subtask_FadeOut ->
+  RestoreGameTask -> sub_0801AE44 -> sub_080809D4): a snapshot holds gMain but
+  not gUI / the menu's VRAM, so one made inside a subtask (pause menu, or an
+  area-change autosave taken mid-transition) resumed that subtask with this
+  session's gUI, and closing it restored garbage room controls. Save states are
+  now made and loaded only in normal play (task GAME, GAMETASK_MAIN,
+  GAMEMAIN_UPDATE), with a message otherwise; an area-change autosave waits
+  for normal play; old slots made inside a menu are refused.

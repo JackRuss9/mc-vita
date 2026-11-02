@@ -1,0 +1,530 @@
+diff --git a/port/port_asset_loader.cpp b/port/port_asset_loader.cpp
+index 21cd165a3..3494aa0c8 100644
+--- a/port/port_asset_loader.cpp
++++ b/port/port_asset_loader.cpp
+@@ -1863,11 +1863,84 @@ extern "C" bool32 Port_IsRoomHeaderPtrReadable(const void* ptr) {
+     return FALSE;
+ }
+ 
++#ifdef TMC_VITA
++/* Every DMA / CpuSet / animation-frame read asks whether its pointer lies in
++ * a cached asset blob. Walking the whole binaryFiles hash map for that (several
++ * thousand nodes, two or three cache misses each) cost about a millisecond per
++ * call on the Vita, and some rooms make dozens of such copies per frame (Minish
++ * path parallax, Biggoron, busy sprite scenes): 30-55 ms of "game" time.
++ * binaryFiles only ever grows and each blob's bytes never move (unique_ptr to a
++ * vector that is not resized after insertion), so keep a sorted [begin, end)
++ * table, rebuilt when the map's size changes, and binary-search it. */
++#include <algorithm>
++#include <atomic>
++namespace {
++struct AssetRange {
++    const u8* begin;
++    const u8* end;
++};
++std::vector<AssetRange> sAssetRanges;
++size_t sAssetRangesForCount = static_cast<size_t>(-1);
++std::atomic_flag sAssetRangesLock = ATOMIC_FLAG_INIT;
++
++struct AssetRangesGuard {
++    AssetRangesGuard() {
++        while (sAssetRangesLock.test_and_set(std::memory_order_acquire)) {
++        }
++    }
++    ~AssetRangesGuard() {
++        sAssetRangesLock.clear(std::memory_order_release);
++    }
++};
++
++void AssetRangesRefresh() {
++    if (sAssetRangesForCount == gAssetGroupCache.binaryFiles.size()) {
++        return;
++    }
++    sAssetRanges.clear();
++    sAssetRanges.reserve(gAssetGroupCache.binaryFiles.size());
++    for (const auto& [_, dataPtr] : gAssetGroupCache.binaryFiles) {
++        if (dataPtr == nullptr || dataPtr->empty()) {
++            continue;
++        }
++        const u8* begin = dataPtr->data();
++        sAssetRanges.push_back({ begin, begin + dataPtr->size() });
++    }
++    std::sort(sAssetRanges.begin(), sAssetRanges.end(),
++              [](const AssetRange& a, const AssetRange& b) { return a.begin < b.begin; });
++    sAssetRangesForCount = gAssetGroupCache.binaryFiles.size();
++}
++
++/* The blob with the greatest begin <= at (blobs are separate allocations, so
++ * they never overlap), or nullptr. */
++const AssetRange* AssetRangeAtOrBefore(const u8* at) {
++    auto it = std::upper_bound(sAssetRanges.begin(), sAssetRanges.end(), at,
++                               [](const u8* p, const AssetRange& r) { return p < r.begin; });
++    if (it == sAssetRanges.begin()) {
++        return nullptr;
++    }
++    return &*(it - 1);
++}
++} // namespace
++#endif
++
+ extern "C" bool32 Port_IsLoadedAssetBytes(const void* ptr, u32 size) {
+     if (ptr == nullptr) {
+         return FALSE;
+     }
+ 
++#ifdef TMC_VITA
++    {
++        const u8* at = static_cast<const u8*>(ptr);
++        AssetRangesGuard guard;
++        AssetRangesRefresh();
++        const AssetRange* r = AssetRangeAtOrBefore(at);
++        /* Same test as below. A pointer exactly at the end of one blob and the
++         * start of the next is found by the next one, as the linear scan did. */
++        return (r != nullptr && at <= r->end && size <= static_cast<u32>(r->end - at)) ? TRUE : FALSE;
++    }
++#endif
++
+     for (const auto& [_, dataPtr] : gAssetGroupCache.binaryFiles) {
+         if (dataPtr == nullptr || dataPtr->empty()) {
+             continue;
+@@ -1896,6 +1969,14 @@ extern "C" const u8* Port_LoadedAssetBytesEnd(const void* ptr) {
+         return nullptr;
+     }
+     const u8* at = static_cast<const u8*>(ptr);
++#ifdef TMC_VITA
++    {
++        AssetRangesGuard guard;
++        AssetRangesRefresh();
++        const AssetRange* r = AssetRangeAtOrBefore(at);
++        return (r != nullptr && at < r->end) ? r->end : nullptr;
++    }
++#endif
+     for (const auto& [_, dataPtr] : gAssetGroupCache.binaryFiles) {
+         if (dataPtr == nullptr || dataPtr->empty()) {
+             continue;
+diff --git a/port/port_imgui_menu.cpp b/port/port_imgui_menu.cpp
+index 199bc65a5..225487086 100644
+--- a/port/port_imgui_menu.cpp
++++ b/port/port_imgui_menu.cpp
+@@ -530,6 +530,9 @@ extern "C" {
+ void SetTask(unsigned int task);
+ }
+ extern "C" int Port_QuickSave_SaveSlot(int slot);
++#ifdef TMC_VITA
++extern "C" int Port_QuickSave_CanSaveNow(void);
++#endif
+ extern "C" int Port_QuickSave_AutoOnAreaChangeEnabled(void);
+ extern "C" void Port_QuickSave_SetAutoOnAreaChange(int on);
+ 
+@@ -539,7 +542,10 @@ static void DoQuitToTitle(bool saveFirst) {
+          * the user pressing F5 first. They can still F6-load it on
+          * the next launch. */
+         if (!Port_QuickSave_SaveSlot(0)) {
+-            Port_DebugMenu_ToastFromExternal("Save failed. Check free space and folder permissions.");
++#ifdef TMC_VITA
++            if (Port_QuickSave_CanSaveNow())
++#endif
++                Port_DebugMenu_ToastFromExternal("Save failed. Check free space and folder permissions.");
+             return;
+         }
+     }
+@@ -1131,7 +1137,10 @@ static void DrawQuitModal(void) {
+                 sQuitModalConfirmed = true;
+                 ImGui::CloseCurrentPopup();
+             } else {
+-                Port_DebugMenu_ToastFromExternal("Save failed. Check free space and folder permissions.");
++#ifdef TMC_VITA
++                if (Port_QuickSave_CanSaveNow())
++#endif
++                    Port_DebugMenu_ToastFromExternal("Save failed. Check free space and folder permissions.");
+             }
+         }
+         ImGui::SameLine();
+diff --git a/port/port_imgui_saves_tab.inc b/port/port_imgui_saves_tab.inc
+index 16142e738..97e3e9c66 100644
+--- a/port/port_imgui_saves_tab.inc
++++ b/port/port_imgui_saves_tab.inc
+@@ -107,7 +107,13 @@ static void DrawRibbonSavesTab(void) {
+             // Column 2: Actions
+             ImGui::TableSetColumnIndex(1);
+             if (ImGui::Button("Save")) {
++#ifdef TMC_VITA
++                /* a refusal (not in normal play) has toasted its own reason */
++                if (Port_QuickSave_SaveSlot(s))
++                    Port_DebugMenu_ToastFromExternal("Saved");
++#else
+                 Port_DebugMenu_ToastFromExternal(Port_QuickSave_SaveSlot(s) ? "Saved" : "Save failed");
++#endif
+             }
+             ImGui::SameLine();
+             if (Port_QuickSave_HasSlot(s)) {
+diff --git a/port/port_linked_stubs.c b/port/port_linked_stubs.c
+index c66e49470..d3d7346ee 100644
+--- a/port/port_linked_stubs.c
++++ b/port/port_linked_stubs.c
+@@ -1320,6 +1320,34 @@ static void Port_WidescreenShadow_PopulateOverlay(const u16* screen, u16* shadow
+     virtuappu_mode1_ws_shadow[3] = shadow;
+ }
+ 
++#ifdef TMC_VITA
++/* Biggoron (Veil Falls top) is drawn on BG1 from a 256 px slice of his
++ * 128-column body tilemap in gUnk_02006F00 (bigGoron.c sub_0806D164), shown
++ * through WIN1 clamped to x < 240; past that the reveal had nothing, and his
++ * body ended in a hard edge with the room's top layer gone. Fill the reveal
++ * columns from the same body tilemap, continuing the slice, and let WIN1 run
++ * to the frame's edge. */
++extern s32 gTmcVitaBigGoronSrcCol;
++extern u8 gUnk_02006F00[];
++static void Port_WidescreenShadow_PopulateBigGoron(u16* shadow) {
++    const u16* body = (const u16*)gUnk_02006F00;
++    enum { kBodyStride = 128, kBodyRows = 32 };
++    const int hofs = gScreen.bg1.xOffset & 0x1ff;
++    /* VRAM column of display x = CLIP_X, less one leading tile */
++    const int base = ((MODE1_GBA_BG_CLIP_X + hofs) / 8) - 1;
++    for (int sr = 0; sr < MODE1_WS_SHADOW_ROWS; sr++) {
++        u16* row_dst = shadow + (size_t)sr * MODE1_WS_SHADOW_COLS;
++        for (int C = 0; C < MODE1_WS_SHADOW_COLS; C++) {
++            const int col = gTmcVitaBigGoronSrcCol + base + C;
++            row_dst[C] = (sr < kBodyRows && col >= 0 && col < kBodyStride) ? body[sr * kBodyStride + col] : (u16)0;
++        }
++    }
++    virtuappu_mode1_ws_shadow_base_tile[1] = base % 32;
++    virtuappu_mode1_ws_shadow[1] = shadow;
++    virtuappu_mode1_ws_win1_extend = 1;
++}
++#endif
++
+ /* Which PPU BG index renders a given map: the PPU selects a BG's tilemap by
+  * its BGCNT screen_base, so the map whose bgSettings->control screen_base
+  * matches gScreen.bgN.control is rendered as BG N. (In the field this is
+@@ -1342,6 +1370,9 @@ static int Port_WidescreenPpuBgForControl(u32 control) {
+ void Port_Widescreen_UpdateShadows(void) {
+     for (int i = 0; i < MODE1_GBA_BG_COUNT; i++)
+         virtuappu_mode1_ws_shadow[i] = NULL;
++#ifdef TMC_VITA
++    virtuappu_mode1_ws_win1_extend = 0;
++#endif
+     virtuappu_mode1_ws_hud_right_anchor = 0;
+     virtuappu_mode1_ws_msg_shift = 0;
+ 
+@@ -1419,6 +1450,14 @@ void Port_Widescreen_UpdateShadows(void) {
+         if (bg >= 0)
+             Port_WidescreenShadow_Populate(bg, gMapDataTopSpecial, sWsShadowBG2);
+     }
++#ifdef TMC_VITA
++    if (gMapTop.bgSettings == NULL && gScreen.bg1.subTileMap == (void*)gMapDataTopSpecial &&
++        (gScreen.lcd.displayControl & DISPCNT_BG1_ON) && gRoomControls.area == AREA_VEIL_FALLS_TOP &&
++        gTmcVitaBigGoronSrcCol >= 0 && virtuappu_mode1_ws_shadow[1] == NULL &&
++        FindEntityByID(NPC, BIG_GORON, 7) != NULL) {
++        Port_WidescreenShadow_PopulateBigGoron(sWsShadowBG2);
++    }
++#endif
+     /* Extend known repeating overlays only; other BG3 canvases stay native.
+      * CloudOverlayManager uses priority 1; Woods and steam use priority 0. */
+     if (((gRoomControls.area == AREA_MINISH_WOODS && gScreen.bg3.control == 0x1e04) ||
+diff --git a/port/port_quicksave.c b/port/port_quicksave.c
+index 769b23939..55869d24d 100644
+--- a/port/port_quicksave.c
++++ b/port/port_quicksave.c
+@@ -283,6 +283,42 @@ static int Snapshot_Restore(const Slot* s) {
+     return 1;
+ }
+ 
++#ifdef TMC_VITA
++#include "game.h"
++extern void Port_DebugMenu_ToastFromExternal(const char* msg);
++
++/* A snapshot holds gMain but not the pause menu's / a subtask's own state
++ * (gUI with the room controls, BG settings, palettes and gfx slots saved when
++ * the menu opened, the menu's VRAM). Restoring one taken inside a subtask
++ * resumed that subtask with whatever gUI this session had; closing it ran
++ * RestoreGameTask on those leftovers (gUI.roomControls -> camera_target) and
++ * crashed in sub_080809D4. Restoring a field snapshot while a subtask is open
++ * leaves the menu's VRAM on screen. So states are made and loaded only in
++ * normal play. */
++static int Port_QuickSave_MainIsPlainGameplay(const Main* m) {
++    return m->task == TASK_GAME && m->state == GAMETASK_MAIN && m->substate == GAMEMAIN_UPDATE;
++}
++
++/* 0 while a save would be refused for not being in normal play (the refusal
++ * toasts its own reason; callers then skip their "Save failed" toast). */
++int Port_QuickSave_CanSaveNow(void) {
++    return Port_QuickSave_MainIsPlainGameplay(&gMain);
++}
++
++static int Port_QuickSave_SlotIsPlainGameplay(const Slot* s) {
++    const u8* src = s->snapshot;
++    for (size_t i = 0; i < NUM_REGIONS; i++) {
++        if (sRegions[i].ptr == (void*)&gMain) {
++            Main m;
++            memcpy(&m, src, sizeof(m));
++            return Port_QuickSave_MainIsPlainGameplay(&m);
++        }
++        src += sRegions[i].size;
++    }
++    return 1;
++}
++#endif
++
+ /* Headless deterministic restore/replay gate. With no external input, advance
+  * the same 120 engine frames twice from one snapshot and require every saved
+  * byte to agree. Runs here so capture/restore stays on a frame boundary. */
+@@ -520,6 +556,14 @@ static int ReadSlotFromDisk(int slot) {
+ int Port_QuickSave_SaveSlot(int slot) {
+     if (slot < 0 || slot >= NUM_SLOTS)
+         return 0;
++#ifdef TMC_VITA
++    if (!Port_QuickSave_MainIsPlainGameplay(&gMain)) {
++        fprintf(stderr, "[quicksave] slot %d not saved: not in normal play (task=%u state=%u sub=%u)\n", slot,
++                gMain.task, gMain.state, gMain.substate);
++        Port_DebugMenu_ToastFromExternal("Save states can only be made during normal play (close the game's menus)");
++        return 0;
++    }
++#endif
+     if (!Snapshot_Capture(&sSlots[slot]))
+         return 0;
+     /* Keep the RAM snapshot usable, but callers must know if it will survive exit. */
+@@ -544,6 +588,19 @@ int Port_QuickSave_LoadSlot(int slot) {
+             return 0;
+         }
+     }
++#ifdef TMC_VITA
++    if (!Port_QuickSave_MainIsPlainGameplay(&gMain)) {
++        fprintf(stderr, "[quicksave] slot %d not loaded: not in normal play (task=%u state=%u sub=%u)\n", slot,
++                gMain.task, gMain.state, gMain.substate);
++        Port_DebugMenu_ToastFromExternal("Load save states during normal play (close the game's menus first)");
++        return 0;
++    }
++    if (!Port_QuickSave_SlotIsPlainGameplay(&sSlots[slot])) {
++        fprintf(stderr, "[quicksave] slot %d not loaded: it was saved inside a menu or transition\n", slot);
++        Port_DebugMenu_ToastFromExternal("This save state was made inside a menu and can't be loaded safely");
++        return 0;
++    }
++#endif
+     if (!Snapshot_Restore(&sSlots[slot])) {
+         fprintf(stderr, "[quicksave] slot %d restore failed\n", slot);
+         return 0;
+@@ -662,6 +719,28 @@ void Port_QuickSave_AutoTick(void) {
+     if (QuickSaveReplayTestTick() || !sAutoEnabled)
+         return;
+     const u64 now = SDL_GetTicks();
++#ifdef TMC_VITA
++    /* An area change shows up during the transition / subtask that causes
++     * it: remember it and take the snapshot once back in normal play. */
++    static int sAutoAreaChangePending = 0;
++    if (!Port_QuickSave_MainIsPlainGameplay(&gMain)) {
++        if (sAutoOnAreaChange && sLastSeenArea != 0xFF &&
++            (gRoomControls.area != sLastSeenArea || gRoomControls.room != sLastSeenRoom)) {
++            sLastSeenArea = gRoomControls.area;
++            sLastSeenRoom = gRoomControls.room;
++            sAutoAreaChangePending = 1;
++        }
++        return;
++    }
++    if (sAutoAreaChangePending) {
++        sAutoAreaChangePending = 0;
++        sLastSeenArea = gRoomControls.area;
++        sLastSeenRoom = gRoomControls.room;
++        sAutoLastSaveTicksMs = now;
++        TakeAutoSnapshot("area-change");
++        return;
++    }
++#endif
+ 
+     /* Area-change trigger. gRoomControls is the engine's source-of-
+      * truth for the current area/room; we just compare against the
+diff --git a/port/ppu/include/cpu/mode1.h b/port/ppu/include/cpu/mode1.h
+index 8835e1e75..78c3fc05d 100644
+--- a/port/ppu/include/cpu/mode1.h
++++ b/port/ppu/include/cpu/mode1.h
+@@ -85,6 +85,12 @@ extern int virtuappu_mode1_ws_shadow_base_tile[MODE1_GBA_BG_COUNT];
+  * instead of in the middle of the revealed world. */
+ #define MODE1_WS_HUD_RIGHT_NATIVE_X 176
+ extern int virtuappu_mode1_ws_hud_right_anchor;
++#ifdef TMC_VITA
++/* Widescreen: when set, a WIN1 whose right edge reaches the native 240 px
++ * edge extends to the frame's right edge (WINxH is 8-bit, so the engine
++ * cannot say 282). Set per frame by Port_Widescreen_UpdateShadows. */
++extern int virtuappu_mode1_ws_win1_extend;
++#endif
+ 
+ /* Runtime WIP widescreen message-box centering. The engine composes the
+  * textbox on BG0 for a 240-px canvas (default box: tiles 1..27). On a wide
+diff --git a/port/ppu/src/mode1.c b/port/ppu/src/mode1.c
+index 068c4a2b2..e2dfad08d 100644
+--- a/port/ppu/src/mode1.c
++++ b/port/ppu/src/mode1.c
+@@ -31,6 +31,9 @@ typedef struct Mode1TilemapEntry {
+ uint16_t* virtuappu_mode1_ws_shadow[MODE1_GBA_BG_COUNT] = { NULL, NULL, NULL, NULL };
+ int virtuappu_mode1_ws_shadow_base_tile[MODE1_GBA_BG_COUNT] = { 0, 0, 0, 0 };
+ int virtuappu_mode1_ws_hud_right_anchor = 0;
++#ifdef TMC_VITA
++int virtuappu_mode1_ws_win1_extend = 0;
++#endif
+ /* Widescreen message-box centering (see mode1.h). All zero = inactive. */
+ int virtuappu_mode1_ws_msg_shift = 0;
+ int virtuappu_mode1_ws_msg_x0 = 0;
+@@ -1007,6 +1010,11 @@ void virtuappu_mode1_composite_line(int line, uint32_t bg_layers[MODE1_GBA_BG_CO
+     if (win0_bottom > MODE1_GBA_HEIGHT) {
+         win0_bottom = MODE1_GBA_HEIGHT;
+     }
++#ifdef TMC_VITA
++    if (virtuappu_mode1_ws_win1_extend && win1_right >= MODE1_GBA_BG_CLIP_X && win1_left <= win1_right) {
++        win1_right = frame_width;
++    }
++#endif
+     if (win1_right > frame_width) {
+         win1_right = frame_width;
+     }
+@@ -1605,7 +1613,7 @@ static void mode1_render_line(int line) {
+         virtuappu_mode1_io_thread_override = mode1_job.per_line_io ? mode1_job.io_snapshots[line] : mode1_memory.io_mem;
+ 
+ #ifdef TMC_VITA
+-        const bool tmc_vita_time = (line % MODE1_VITA_THREADS) == 0; /* the main thread's lines */
++        const bool tmc_vita_time = (line % MODE1_VITA_THREADS) == 0; /* a third of the lines */
+         unsigned tmc_t0 = tmc_vita_time ? sceKernelGetProcessTimeLow() : 0u;
+ #endif
+         memset(obj_layer, 0, (size_t)mode1_frame_width * sizeof(uint32_t));
+@@ -1661,10 +1669,12 @@ static void mode1_render_line(int line) {
+         virtuappu_mode1_composite_line(line, bg_layers, NULL, obj_layer, obj_priority, line_dispcnt);
+ #ifdef TMC_VITA
+         if (tmc_vita_time) {
++            /* every third line, whichever thread rendered it (lines are
++             * handed out dynamically), so atomically */
+             unsigned tmc_t3 = sceKernelGetProcessTimeLow();
+-            gTmcVitaPpuBgUs += tmc_t1 - tmc_t0;
+-            gTmcVitaPpuObjUs += tmc_t2 - tmc_t1;
+-            gTmcVitaPpuCompUs += tmc_t3 - tmc_t2;
++            __atomic_fetch_add(&gTmcVitaPpuBgUs, tmc_t1 - tmc_t0, __ATOMIC_RELAXED);
++            __atomic_fetch_add(&gTmcVitaPpuObjUs, tmc_t2 - tmc_t1, __ATOMIC_RELAXED);
++            __atomic_fetch_add(&gTmcVitaPpuCompUs, tmc_t3 - tmc_t2, __ATOMIC_RELAXED);
+         }
+ #endif
+ 
+@@ -1672,15 +1682,26 @@ static void mode1_render_line(int line) {
+     }
+ 
+ #ifdef TMC_VITA
+-/* Two worker threads pinned to user cores 1 and 2 render every third
+- * scanline each (lines 1, 4, 7... and 2, 5, 8...); the main thread, pinned to
+- * core 0, renders lines 0, 3, 6... Interleaving keeps the three shares even
+- * whatever the scene. Started on the first frame; if anything fails (or the
++/* Two worker threads pinned to user cores 1 and 2 and the main thread, pinned
++ * to core 0, render the scanlines between them (taken from a shared counter,
++ * see mode1_vita_take_line). Started on the first frame; if anything fails (or the
+  * threads can't be told apart by TPIDRURO) rendering stays single-threaded. */
+ static SceUID mode1_vita_start_sema[MODE1_VITA_THREADS];
+ static SceUID mode1_vita_done_sema[MODE1_VITA_THREADS];
+ static int mode1_vita_state; /* 0 = not tried, 1 = running, -1 = off */
+ 
++/* Scanlines are handed out one at a time from a shared counter rather than
++ * as fixed thirds: the workers share their cores with the audio mixer and
++ * the system's threads, and with fixed thirds the main thread sat waiting
++ * for them (render ~13 ms against ~7 ms of its own lines in the Mt Crenel
++ * logs). Every line is independent (per-line IO snapshots, per-thread
++ * scratch found through TPIDRURO), so any thread can take any line. */
++static int mode1_vita_next_line;
++
++static inline int mode1_vita_take_line(void) {
++    return __atomic_fetch_add(&mode1_vita_next_line, 1, __ATOMIC_RELAXED);
++}
++
+ static int mode1_vita_worker(SceSize args, void* argp) {
+     const int index = *(const int*)argp;
+     (void)args;
+@@ -1688,7 +1709,7 @@ static int mode1_vita_worker(SceSize args, void* argp) {
+     sceKernelSignalSema(mode1_vita_done_sema[index], 1); /* registered */
+     for (;;) {
+         sceKernelWaitSema(mode1_vita_start_sema[index], 1, NULL);
+-        for (int line = index; line < MODE1_GBA_HEIGHT; line += MODE1_VITA_THREADS) {
++        for (int line = mode1_vita_take_line(); line < MODE1_GBA_HEIGHT; line = mode1_vita_take_line()) {
+             mode1_render_line(line);
+         }
+         sceKernelSignalSema(mode1_vita_done_sema[index], 1);
+@@ -1737,9 +1758,11 @@ static bool mode1_vita_render_parallel(void) {
+         mode1_vita_start_workers();
+     if (mode1_vita_state != 1)
+         return false;
++    /* reset before the start signals (the semaphore orders it for the workers) */
++    __atomic_store_n(&mode1_vita_next_line, 0, __ATOMIC_RELEASE);
+     for (int i = 1; i < MODE1_VITA_THREADS; i++)
+         sceKernelSignalSema(mode1_vita_start_sema[i], 1);
+-    for (int line = 0; line < MODE1_GBA_HEIGHT; line += MODE1_VITA_THREADS)
++    for (int line = mode1_vita_take_line(); line < MODE1_GBA_HEIGHT; line = mode1_vita_take_line())
+         mode1_render_line(line);
+     for (int i = 1; i < MODE1_VITA_THREADS; i++)
+         sceKernelWaitSema(mode1_vita_done_sema[i], 1, NULL);
+diff --git a/src/gameUtils.c b/src/gameUtils.c
+index 288ac78fd..53a459e5d 100644
+--- a/src/gameUtils.c
++++ b/src/gameUtils.c
+@@ -430,6 +430,29 @@ void RestoreGameTask(bool32 loadGfx) {
+      * GBA-original mechanism that gets those into VRAM after a map subtask
+      * doesn't fire on the port. Raise the per-layer updated flag and run the
+      * buffer→VRAM copy immediately so the room reappears instead of black. */
++#ifdef TMC_VITA
++    /* Only for layers that show a map, or that a manager feeds from its own
++     * buffer. A layer that is neither still points at the shared gBG1Buffer /
++     * gBG2Buffer, which the menu has just used for its own screens; its real
++     * tilemap was loaded straight into VRAM by the room (Mt Crenel's storm
++     * rain on BG1, reloaded by WeatherChangeManager_OnEnterRoom above).
++     * Copying the buffer painted the menu's tilemap over the room after
++     * closing the pause menu in the rain. */
++    {
++        BgSettings* bg1 = &gScreen.bg1;
++        BgSettings* bg2 = (BgSettings*)&gScreen.bg2;
++        gScreen.bg0.updated = 1;
++        sub_08016CA8(&gScreen.bg0);
++        if (gMapTop.bgSettings == bg1 || gMapBottom.bgSettings == bg1 || bg1->subTileMap != (void*)gBG1Buffer) {
++            bg1->updated = 1;
++            sub_08016CA8(bg1);
++        }
++        if (gMapTop.bgSettings == bg2 || gMapBottom.bgSettings == bg2 || bg2->subTileMap != (void*)gBG2Buffer) {
++            bg2->updated = 1;
++            sub_08016CA8(bg2);
++        }
++    }
++#else
+     gScreen.bg0.updated = 1;
+     gScreen.bg1.updated = 1;
+     gScreen.bg2.updated = 1;
+@@ -437,6 +460,7 @@ void RestoreGameTask(bool32 loadGfx) {
+     sub_08016CA8(&gScreen.bg1);
+     sub_08016CA8((BgSettings*)&gScreen.bg2);
+ #endif
++#endif
+ }
+ 
+ void LoadRoomBgm(void) {
+diff --git a/src/npc/bigGoron.c b/src/npc/bigGoron.c
+index accd313af..0f08d45d1 100644
+--- a/src/npc/bigGoron.c
++++ b/src/npc/bigGoron.c
+@@ -37,6 +37,9 @@ static const u16 goronSounds[] = {
+ 
+ extern u16 gMapDataTopSpecial[];
+ extern u8 gUnk_02006F00[];
++#ifdef TMC_VITA
++s32 gTmcVitaBigGoronSrcCol = -1;
++#endif
+ 
+ void sub_0806D520(BigGoronEntity* this, u32);
+ void sub_0806CF30(BigGoronEntity* this);
+@@ -244,9 +247,17 @@ void sub_0806D164(Entity* this) {
+          * if the entity is far enough offscreen that we can't show a
+          * meaningful slice — nothing visible to update anyway. */
+         if (startOff > 0x4000u - 0x2000u) {
++#ifdef TMC_VITA
++            gTmcVitaBigGoronSrcCol = -1;
++#endif
+             gScreen.bg1.updated = 1;
+             return;
+         }
++#ifdef TMC_VITA
++        /* first gUnk_02006F00 column (u16) shown in BG1 column 0, for the
++         * widescreen reveal past x = 240 (Port_Widescreen_UpdateShadows) */
++        gTmcVitaBigGoronSrcCol = (s32)(startOff / 2);
++#endif
+ #endif
+         for (index = 0x20, ptr = &puVar1[startOff]; index != 0; index--) {
+             DmaCopy16(3, ptr, puVar2, 0x20 * 2);
