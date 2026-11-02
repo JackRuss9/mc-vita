@@ -207,3 +207,18 @@
   now made and loaded only in normal play (task GAME, GAMETASK_MAIN,
   GAMEMAIN_UPDATE), with a message otherwise; an area-change autosave waits
   for normal play; old slots made inside a menu are refused.
+
+## v1.0.2: widescreen fills (patches/picori/0003-v1.0.2-widescreen.patch)
+- At 282 px, columns past x = 240 are drawn from port-side "shadow" tilemaps,
+  which existed only for the room maps and three area-specific BG3 overlays;
+  any other 32-column layer was culled at 240 (black band). Now also filled:
+  - BG3 static / animated backgrounds and overlays (control 0x1e07, 0x1e04,
+    0x1e05) in any area, by wrapping their screenblock (the GBA wraps these
+    itself once the parallax passes 16 px): Veil Falls / Mt Crenel skies.
+  - Mt Crenel's storm rain on BG1, wrapped the same way.
+  - Slice layers, where a manager copies a 32-column window of a 128-column
+    tilemap each frame: Biggoron (replacing v1.0.1's special case) and the
+    horizontal Minish path parallax (BG1 and BG3). They publish source and
+    first column through TmcVita_WsPublishSlice.
+- Any enabled 32-column layer still without a fill is logged once per room:
+  "[ws] area=.. room=..: BGn (control ....) has no widescreen fill".

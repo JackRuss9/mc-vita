@@ -1,0 +1,217 @@
+diff --git a/port/port_linked_stubs.c b/port/port_linked_stubs.c
+index d3d7346ee..d2e269c0d 100644
+--- a/port/port_linked_stubs.c
++++ b/port/port_linked_stubs.c
+@@ -1321,30 +1321,129 @@ static void Port_WidescreenShadow_PopulateOverlay(const u16* screen, u16* shadow
+ }
+ 
+ #ifdef TMC_VITA
+-/* Biggoron (Veil Falls top) is drawn on BG1 from a 256 px slice of his
+- * 128-column body tilemap in gUnk_02006F00 (bigGoron.c sub_0806D164), shown
+- * through WIN1 clamped to x < 240; past that the reveal had nothing, and his
+- * body ended in a hard edge with the room's top layer gone. Fill the reveal
+- * columns from the same body tilemap, continuing the slice, and let WIN1 run
+- * to the frame's edge. */
+-extern s32 gTmcVitaBigGoronSrcCol;
+-extern u8 gUnk_02006F00[];
+-static void Port_WidescreenShadow_PopulateBigGoron(u16* shadow) {
+-    const u16* body = (const u16*)gUnk_02006F00;
+-    enum { kBodyStride = 128, kBodyRows = 32 };
+-    const int hofs = gScreen.bg1.xOffset & 0x1ff;
++/* Widescreen reveal (x >= 240) for 32-column BG layers that are not a room
++ * map. Without a shadow the PPU culls such a layer at 240 and the backdrop
++ * (black) shows through.
++ *
++ * Slice layers: a manager copies a 32-column window of a wider tilemap into
++ * the layer each frame (src stride 128 u16, 32 rows) -- Biggoron's body
++ * (bigGoron.c), the Minish path parallax layers. Their reveal continues the
++ * same source tilemap past the window. Callers publish (source, first
++ * column, frame) through TmcVita_WsPublishSlice. */
++u32 gTmcVitaWsFrame;
++static struct {
++    const u16* src;
++    s32 col;
++    u32 frame;
++} sWsSlice[MODE1_GBA_BG_COUNT];
++
++void TmcVita_WsPublishSlice(int bg, const void* src, s32 firstCol) {
++    if (bg < 0 || bg >= MODE1_GBA_BG_COUNT)
++        return;
++    sWsSlice[bg].src = (const u16*)src;
++    sWsSlice[bg].col = firstCol;
++    sWsSlice[bg].frame = gTmcVitaWsFrame;
++}
++
++static int Port_WidescreenSliceLive(int bg) {
++    return sWsSlice[bg].src != NULL && sWsSlice[bg].col >= 0 && gTmcVitaWsFrame - sWsSlice[bg].frame <= 1;
++}
++
++static void Port_WidescreenShadow_PopulateSlice(int bg, u16 xOffset, u16* shadow) {
++    enum { kSrcStride = 128, kSrcRows = 32 };
++    const u16* src = sWsSlice[bg].src;
++    const int hofs = xOffset & 0x1ff;
+     /* VRAM column of display x = CLIP_X, less one leading tile */
+     const int base = ((MODE1_GBA_BG_CLIP_X + hofs) / 8) - 1;
+     for (int sr = 0; sr < MODE1_WS_SHADOW_ROWS; sr++) {
+         u16* row_dst = shadow + (size_t)sr * MODE1_WS_SHADOW_COLS;
+         for (int C = 0; C < MODE1_WS_SHADOW_COLS; C++) {
+-            const int col = gTmcVitaBigGoronSrcCol + base + C;
+-            row_dst[C] = (sr < kBodyRows && col >= 0 && col < kBodyStride) ? body[sr * kBodyStride + col] : (u16)0;
++            const int col = sWsSlice[bg].col + base + C;
++            row_dst[C] = (sr < kSrcRows && col >= 0 && col < kSrcStride) ? src[sr * kSrcStride + col] : (u16)0;
++        }
++    }
++    virtuappu_mode1_ws_shadow_base_tile[bg] = base % 32;
++    virtuappu_mode1_ws_shadow[bg] = shadow;
++}
++
++/* Wrap layers: a repeating 256 px texture loaded straight into its VRAM
++ * screenblock (skies and static backgrounds, rain, fog, steam, light rays).
++ * The GBA itself shows these wrapped once the parallax passes 16 px, so the
++ * reveal is simply the same screenblock wrapped. */
++static void Port_WidescreenShadow_PopulateWrap(int bg, u16 control, u16* shadow) {
++    const u16* screen = (const u16*)(gVram + (((control >> 8) & 0x1fu) * 0x800u));
++    for (int row = 0; row < MODE1_WS_SHADOW_ROWS; ++row) {
++        for (int col = 0; col < MODE1_WS_SHADOW_COLS; ++col) {
++            shadow[row * MODE1_WS_SHADOW_COLS + col] = screen[row * 32 + (col & 31)];
++        }
++    }
++    virtuappu_mode1_ws_shadow_base_tile[bg] = 0;
++    virtuappu_mode1_ws_shadow[bg] = shadow;
++}
++
++static u16 sWsShadowSlice1[MODE1_WS_SHADOW_ROWS * MODE1_WS_SHADOW_COLS];
++static u16 sWsShadowSlice3[MODE1_WS_SHADOW_ROWS * MODE1_WS_SHADOW_COLS];
++static u16 sWsShadowWrap1[MODE1_WS_SHADOW_ROWS * MODE1_WS_SHADOW_COLS];
++
++static u16 Port_WidescreenBgControl(int bg) {
++    switch (bg) {
++        case 0: return gScreen.bg0.control;
++        case 1: return gScreen.bg1.control;
++        case 2: return gScreen.bg2.control;
++        default: return gScreen.bg3.control;
++    }
++}
++
++/* Fill what we know how to fill; log (once per room and layer) any other
++ * enabled 32-column layer still cut at 240, to find the next cases. */
++static void Port_WidescreenShadow_Extras(void) {
++    const u16 dispcnt = gScreen.lcd.displayControl;
++    gTmcVitaWsFrame++;
++
++    /* slices: Biggoron on BG1, Minish path parallax on BG1 / BG3 */
++    if (virtuappu_mode1_ws_shadow[1] == NULL && (dispcnt & DISPCNT_BG1_ON) && Port_WidescreenSliceLive(1) &&
++        gMapTop.bgSettings != &gScreen.bg1) {
++        Port_WidescreenShadow_PopulateSlice(1, gScreen.bg1.xOffset, sWsShadowSlice1);
++        if (gRoomControls.area == AREA_VEIL_FALLS_TOP) {
++            /* Biggoron's WIN1 is clamped to the native width: open it to the edge */
++            virtuappu_mode1_ws_win1_extend = 1;
++        }
++    }
++    if (virtuappu_mode1_ws_shadow[3] == NULL && (dispcnt & DISPCNT_BG3_ON) && Port_WidescreenSliceLive(3)) {
++        Port_WidescreenShadow_PopulateSlice(3, gScreen.bg3.xOffset, sWsShadowSlice3);
++    }
++
++    /* wraps: BG3 static / animated backgrounds and overlays */
++    if (virtuappu_mode1_ws_shadow[3] == NULL && (dispcnt & DISPCNT_BG3_ON) &&
++        (gScreen.bg3.control == 0x1e07 || gScreen.bg3.control == 0x1e04 || gScreen.bg3.control == 0x1e05)) {
++        Port_WidescreenShadow_PopulateWrap(3, gScreen.bg3.control, sWsShadowOverlay);
++    }
++    /* Mt Crenel's storm rain on BG1 (WeatherChangeManager unbinds the top map) */
++    if (virtuappu_mode1_ws_shadow[1] == NULL && (dispcnt & DISPCNT_BG1_ON) && gRoomControls.area == AREA_MT_CRENEL &&
++        gMapTop.bgSettings == NULL && gMapBottom.bgSettings != &gScreen.bg1 &&
++        gScreen.bg1.subTileMap == (void*)gBG1Buffer) {
++        Port_WidescreenShadow_PopulateWrap(1, gScreen.bg1.control, sWsShadowWrap1);
++    }
++
++    {
++        static u32 sLoggedKey = 0xffffffffu;
++        static u8 sLoggedMask = 0;
++        const u32 key = ((u32)gRoomControls.area << 8) | gRoomControls.room;
++        if (key != sLoggedKey) {
++            sLoggedKey = key;
++            sLoggedMask = 0;
++        }
++        for (int bg = 1; bg < MODE1_GBA_BG_COUNT; bg++) {
++            const u16 ctl = Port_WidescreenBgControl(bg);
++            if (!(dispcnt & (DISPCNT_BG0_ON << bg)) || virtuappu_mode1_ws_shadow[bg] != NULL || (ctl >> 14) & 1)
++                continue; /* off, filled, or 64 columns wide (rendered natively) */
++            if (!(sLoggedMask & (1u << bg))) {
++                sLoggedMask |= (u8)(1u << bg);
++                fprintf(stderr, "[ws] area=%u room=%u: BG%d (control %04x) has no widescreen fill, cut at x=240\n",
++                        (unsigned)gRoomControls.area, (unsigned)gRoomControls.room, bg, (unsigned)ctl);
++            }
+         }
+     }
+-    virtuappu_mode1_ws_shadow_base_tile[1] = base % 32;
+-    virtuappu_mode1_ws_shadow[1] = shadow;
+-    virtuappu_mode1_ws_win1_extend = 1;
+ }
+ #endif
+ 
+@@ -1451,12 +1550,7 @@ void Port_Widescreen_UpdateShadows(void) {
+             Port_WidescreenShadow_Populate(bg, gMapDataTopSpecial, sWsShadowBG2);
+     }
+ #ifdef TMC_VITA
+-    if (gMapTop.bgSettings == NULL && gScreen.bg1.subTileMap == (void*)gMapDataTopSpecial &&
+-        (gScreen.lcd.displayControl & DISPCNT_BG1_ON) && gRoomControls.area == AREA_VEIL_FALLS_TOP &&
+-        gTmcVitaBigGoronSrcCol >= 0 && virtuappu_mode1_ws_shadow[1] == NULL &&
+-        FindEntityByID(NPC, BIG_GORON, 7) != NULL) {
+-        Port_WidescreenShadow_PopulateBigGoron(sWsShadowBG2);
+-    }
++    Port_WidescreenShadow_Extras();
+ #endif
+     /* Extend known repeating overlays only; other BG3 canvases stay native.
+      * CloudOverlayManager uses priority 1; Woods and steam use priority 0. */
+diff --git a/src/manager/horizontalMinishPathBackgroundManager.c b/src/manager/horizontalMinishPathBackgroundManager.c
+index eba39ea09..6e92e46e0 100644
+--- a/src/manager/horizontalMinishPathBackgroundManager.c
++++ b/src/manager/horizontalMinishPathBackgroundManager.c
+@@ -89,6 +89,16 @@ void sub_08058004(u32 unk1, void* src, void* dest) {
+             readBytes > 0x4000u - srcOff - startOff)
+             return;
+     }
++#endif
++#ifdef TMC_VITA
++    {
++        /* widescreen reveal past x = 240 (port_linked_stubs.c) */
++        extern void TmcVita_WsPublishSlice(int bg, const void* src, s32 firstCol);
++        if (dest == (void*)gBG3Buffer)
++            TmcVita_WsPublishSlice(3, src, (s32)(startOff / 2));
++        else if (dest == (void*)(gBG3Buffer + 0x400))
++            TmcVita_WsPublishSlice(1, src, (s32)(startOff / 2));
++    }
+ #endif
+     src += startOff;
+     for (tmp; tmp != 0; tmp--) {
+diff --git a/src/npc/bigGoron.c b/src/npc/bigGoron.c
+index 0f08d45d1..b5eeaf91b 100644
+--- a/src/npc/bigGoron.c
++++ b/src/npc/bigGoron.c
+@@ -38,7 +38,7 @@ static const u16 goronSounds[] = {
+ extern u16 gMapDataTopSpecial[];
+ extern u8 gUnk_02006F00[];
+ #ifdef TMC_VITA
+-s32 gTmcVitaBigGoronSrcCol = -1;
++extern void TmcVita_WsPublishSlice(int bg, const void* src, s32 firstCol);
+ #endif
+ 
+ void sub_0806D520(BigGoronEntity* this, u32);
+@@ -247,16 +247,13 @@ void sub_0806D164(Entity* this) {
+          * if the entity is far enough offscreen that we can't show a
+          * meaningful slice — nothing visible to update anyway. */
+         if (startOff > 0x4000u - 0x2000u) {
+-#ifdef TMC_VITA
+-            gTmcVitaBigGoronSrcCol = -1;
+-#endif
+             gScreen.bg1.updated = 1;
+             return;
+         }
+ #ifdef TMC_VITA
+         /* first gUnk_02006F00 column (u16) shown in BG1 column 0, for the
+          * widescreen reveal past x = 240 (Port_Widescreen_UpdateShadows) */
+-        gTmcVitaBigGoronSrcCol = (s32)(startOff / 2);
++        TmcVita_WsPublishSlice(1, gUnk_02006F00, (s32)(startOff / 2));
+ #endif
+ #endif
+         for (index = 0x20, ptr = &puVar1[startOff]; index != 0; index--) {
