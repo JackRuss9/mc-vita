@@ -264,3 +264,10 @@
   geometry is now built into a private ImDrawList when the box changes
   (pixels, colours, position, scale, atlas UVs, draw flags) and its vertices
   copied into the background list on the other frames.
+
+## v1.1.2 (patches/picori/0009-v1.1.2-file-select.patch)
+- File select at 36-50 fps with a randomizer save: moving the cursor onto
+  that slot ran SetActiveSave, which loads its seed (re-parses default.logic
+  and re-checks the table: ~350-500 ms each time), and moving off it reset to
+  vanilla. Cursor previews (sub_08050AFC) now skip the randomizer part; the
+  seed is loaded when the slot is chosen with A / START.

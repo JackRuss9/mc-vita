@@ -1,0 +1,44 @@
+diff --git a/src/fileselect.c b/src/fileselect.c
+index ed0c69eff..5befc2a12 100644
+--- a/src/fileselect.c
++++ b/src/fileselect.c
+@@ -802,12 +802,25 @@ void LoadOptionsFromSave(u32 idx) {
+     gUsedPalettes = 0xffffffff;
+ }
+ 
++#ifdef TMC_VITA
++/* Set while the cursor only previews a slot (sub_08050AFC). Activating a
++ * randomizer slot re-parses the logic file and re-checks the seed: about half
++ * a second on the Vita, every time the cursor passed over that slot. The
++ * preview shows the save's own data; the seed is activated when the slot is
++ * chosen (A / START), which calls SetActiveSave again. */
++static bool sTmcVitaPreviewOnly;
++#endif
++
+ void SetActiveSave(u32 idx) {
+     if (idx < NUM_SAVE_SLOTS) {
+         gSaveHeader->saveFileId = idx;
+         MemCopy(&gFileSelectState.saves[idx], &gSave, sizeof(gFileSelectState.saves[idx]));
+     }
+     LoadOptionsFromSave(idx);
++#ifdef TMC_VITA
++    if (sTmcVitaPreviewOnly)
++        return;
++#endif
+ #ifdef PC_PORT
+     if (idx < NUM_SAVE_SLOTS) {
+         if (!Port_RandoSave_LoadSlot((int)idx)) {
+@@ -1438,7 +1451,13 @@ void sub_08050A64(u32 idx) {
+ void sub_08050B3C(u16*);
+ 
+ void sub_08050AFC(u32 idx) {
++#ifdef TMC_VITA
++    sTmcVitaPreviewOnly = true;
+     SetActiveSave(idx);
++    sTmcVitaPreviewOnly = false;
++#else
++    SetActiveSave(idx);
++#endif
+     MemClear(&gBG1Buffer, sizeof(gBG1Buffer));
+     if (gFileSelectState.saveStatus[idx] == SAVE_VALID) {
+         sub_08050B3C(&gBG1Buffer[0x14E]);
