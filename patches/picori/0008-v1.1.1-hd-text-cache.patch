@@ -1,0 +1,113 @@
+diff --git a/port/port_hd_text.cpp b/port/port_hd_text.cpp
+index a55c9c205..16a3b08e6 100644
+--- a/port/port_hd_text.cpp
++++ b/port/port_hd_text.cpp
+@@ -1,6 +1,10 @@
+ #include "port_hd_text.h"
+ #include "port_hd_text_geometry.h"
+ #include "imgui.h"
++#ifdef TMC_VITA
++#include <climits>
++#include <cstring>
++#endif
+ 
+ extern "C" bool Message_CopyTextCanvas(uint8_t* pixels, int capacity, int* x, int* y, int* width, int* height);
+ 
+@@ -21,7 +25,60 @@ extern "C" void Port_HDText_Draw(const uint32_t* frame, int frameWidth, int fram
+         return;
+     ImDrawList* draw = ImGui::GetBackgroundDrawList();
+     const ImVec2 origin(viewportX + x * sx, viewportY + y * sy);
++#ifdef TMC_VITA
++    /* The text box is rebuilt from per-pixel polygons and anti-aliased edge
++     * lines every frame: 10-15 ms a frame on the Vita while a box is up.
++     * Its pixels change only while text is being written, so build the
++     * geometry into a private draw list when the box (pixels, colours,
++     * position, scale, atlas UVs, flags) changes, and copy the vertices on
++     * the other frames. Same output, built once. */
++    static ImDrawList* sCache = nullptr;
++    static uint8_t sKeyPixels[PortHDText::kMaxPixels];
++    static struct Key {
++        int x, y, w, h;
++        float ox, oy, sx, sy;
++        uint32_t colors[16];
++        ImVec2 white;
++        ImVec4 lines1;
++        ImDrawListFlags flags;
++    } sKey;
++    static bool sKeyValid = false;
++    Key key;
++    std::memset(&key, 0, sizeof(key));
++    key.x = x;
++    key.y = y;
++    key.w = width;
++    key.h = height;
++    key.ox = origin.x;
++    key.oy = origin.y;
++    key.sx = sx;
++    key.sy = sy;
++    std::memcpy(key.colors, colors, sizeof(key.colors));
++    key.white = ImGui::GetIO().Fonts->TexUvWhitePixel;
++    key.lines1 = ImGui::GetIO().Fonts->TexUvLines[1];
++    key.flags = draw->Flags;
++    const size_t npix = (size_t)width * (size_t)height;
++    const ImVec2 clipMax(origin.x + width * sx, origin.y + height * sy);
++    if (sCache == nullptr)
++        sCache = IM_NEW(ImDrawList)(ImGui::GetDrawListSharedData());
++    if (sCache->_Data != draw->_Data)
++        sKeyValid = false;
++    const bool hit = sKeyValid && std::memcmp(&key, &sKey, sizeof(key)) == 0 &&
++                     std::memcmp(pixels, sKeyPixels, npix) == 0;
++    ImDrawList* const target = draw;
++    if (!hit) {
++        sCache->_Data = draw->_Data;
++        sCache->_ResetForNewFrame();
++        sCache->Flags = draw->Flags;
++        sCache->PushClipRect(origin, clipMax, false);
++        draw = sCache;
++    }
++    target->PushClipRect(origin, clipMax, true);
++    if (hit)
++        goto replay;
++#else
+     draw->PushClipRect(origin, ImVec2(origin.x + width * sx, origin.y + height * sy), true);
++#endif
+     draw->AddRectFilled(origin, ImVec2(origin.x + width * sx, origin.y + height * sy), colors[15]);
+     // shortcut: ROM contours have no extra font detail, use licensed outline glyphs when more detail is needed.
+     for (int row = 0; row < height; ++row) {
+@@ -65,5 +122,36 @@ extern "C" void Port_HDText_Draw(const uint32_t* frame, int frameWidth, int fram
+             edge(7, 0, tl > 0);
+         }
+     }
++#ifdef TMC_VITA
++    sKey = key;
++    std::memcpy(sKeyPixels, pixels, npix);
++    sKeyValid = true;
++replay:
++    /* copy the cached geometry into the background list, command by command
++     * (16-bit indices: PrimReserve starts a new vertex block when needed) */
++    for (const ImDrawCmd& cmd : sCache->CmdBuffer) {
++        if (cmd.ElemCount == 0 || cmd.UserCallback != nullptr)
++            continue;
++        const ImDrawIdx* idx = sCache->IdxBuffer.Data + cmd.IdxOffset;
++        unsigned lo = UINT_MAX, hi = 0;
++        for (unsigned i = 0; i < cmd.ElemCount; ++i) {
++            const unsigned v = idx[i];
++            lo = v < lo ? v : lo;
++            hi = v > hi ? v : hi;
++        }
++        const int vcount = (int)(hi - lo + 1);
++        target->PrimReserve((int)cmd.ElemCount, vcount);
++        std::memcpy(target->_VtxWritePtr, sCache->VtxBuffer.Data + cmd.VtxOffset + lo,
++                    (size_t)vcount * sizeof(ImDrawVert));
++        const unsigned base = target->_VtxCurrentIdx;
++        for (unsigned i = 0; i < cmd.ElemCount; ++i)
++            target->_IdxWritePtr[i] = (ImDrawIdx)(base + (idx[i] - lo));
++        target->_VtxWritePtr += vcount;
++        target->_IdxWritePtr += cmd.ElemCount;
++        target->_VtxCurrentIdx += (unsigned)vcount;
++    }
++    target->PopClipRect();
++#else
+     draw->PopClipRect();
++#endif
+ }

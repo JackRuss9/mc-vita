@@ -256,3 +256,11 @@
 - The "Cucco Timer Doesn't Decrease" cheat only had its checkbox; the
   minigame timer (cuccoMinigame.c) now holds while it's on.
 - README and release/v1.1.0.md updated; version 01.10.
+
+## v1.1.1 (patches/picori/0008-v1.1.1-hd-text-cache.patch)
+- Text boxes with HD dialogue: game ~1.5 ms but menus/overlays 10-15 ms a
+  frame (40-48 fps) for as long as a box was up. Port_HDText_Draw rebuilt the
+  box from per-pixel polygons and anti-aliased edge lines every frame. The
+  geometry is now built into a private ImDrawList when the box changes
+  (pixels, colours, position, scale, atlas UVs, draw flags) and its vertices
+  copied into the background list on the other frames.
