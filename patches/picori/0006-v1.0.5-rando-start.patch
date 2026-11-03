@@ -1,42 +1,8 @@
 diff --git a/port/port_imgui_menu.cpp b/port/port_imgui_menu.cpp
-index 199bc65a5..28f14f7b5 100644
+index 225487086..28f14f7b5 100644
 --- a/port/port_imgui_menu.cpp
 +++ b/port/port_imgui_menu.cpp
-@@ -530,6 +530,9 @@ extern "C" {
- void SetTask(unsigned int task);
- }
- extern "C" int Port_QuickSave_SaveSlot(int slot);
-+#ifdef TMC_VITA
-+extern "C" int Port_QuickSave_CanSaveNow(void);
-+#endif
- extern "C" int Port_QuickSave_AutoOnAreaChangeEnabled(void);
- extern "C" void Port_QuickSave_SetAutoOnAreaChange(int on);
- 
-@@ -539,7 +542,10 @@ static void DoQuitToTitle(bool saveFirst) {
-          * the user pressing F5 first. They can still F6-load it on
-          * the next launch. */
-         if (!Port_QuickSave_SaveSlot(0)) {
--            Port_DebugMenu_ToastFromExternal("Save failed. Check free space and folder permissions.");
-+#ifdef TMC_VITA
-+            if (Port_QuickSave_CanSaveNow())
-+#endif
-+                Port_DebugMenu_ToastFromExternal("Save failed. Check free space and folder permissions.");
-             return;
-         }
-     }
-@@ -1131,7 +1137,10 @@ static void DrawQuitModal(void) {
-                 sQuitModalConfirmed = true;
-                 ImGui::CloseCurrentPopup();
-             } else {
--                Port_DebugMenu_ToastFromExternal("Save failed. Check free space and folder permissions.");
-+#ifdef TMC_VITA
-+                if (Port_QuickSave_CanSaveNow())
-+#endif
-+                    Port_DebugMenu_ToastFromExternal("Save failed. Check free space and folder permissions.");
-             }
-         }
-         ImGui::SameLine();
-@@ -1174,6 +1183,35 @@ static void DrawRandoFileMenuModal(void) {
+@@ -1183,6 +1183,35 @@ static void DrawRandoFileMenuModal(void) {
  
          ImGui::TextColored(ImVec4(0.78f, 0.95f, 0.78f, 1.0f), "PORT & RANDOMIZER SETUP");
          ImGui::Separator();
