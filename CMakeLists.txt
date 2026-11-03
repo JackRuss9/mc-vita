@@ -17,7 +17,7 @@ include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 
 set(VITA_APP_NAME "The Minish Cap")
 set(VITA_TITLEID "TMCV00001")
-set(VITA_VERSION "01.05")
+set(VITA_VERSION "01.10")
 
 set(P ${CMAKE_SOURCE_DIR}/picori)
 set(D ${CMAKE_SOURCE_DIR}/deps)

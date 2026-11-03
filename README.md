@@ -9,11 +9,11 @@ extras: in-game cheats, a name change, and a skippable intro.
 No game data is included. The game reads a ROM you dumped yourself from your
 own cartridge.
 
-> **Status: playable.** The USA version in English was played from a new file
-> to the end of the first dungeon (Deepwood Shrine), with all the cheats and
-> extras below. The rest of the game should work the same way, because it is
-> the same code, but nobody has played further on the Vita yet. See
-> [What has been tested](#what-has-been-tested).
+> **Status: complete.** The USA version in English has been played on a real
+> Vita from a new file to the end, at 100%: every item and upgrade (all bomb
+> bags and quivers, Remote Bombs, Light Arrows, Magic Boomerang...), every
+> figurine and every Kinstone fusion. All the cheats and the randomizer were
+> tested too. See [What has been tested](#what-has-been-tested).
 
 ## Where this comes from
 
@@ -25,7 +25,7 @@ own cartridge.
 
 This repository does **not** contain a copy of Picori. `build.sh` downloads
 Picori at a fixed commit (`d377558`) and applies our changes from
-`patches/picori/0001-ps-vita.patch`. Everything else that is Vita-only lives in
+`patches/picori/*.patch`, in order. Everything else that is Vita-only lives in
 `vita/`.
 
 All credit for the game code, the port and its features goes to the zeldaret
@@ -37,13 +37,19 @@ covers the Vita side.
 ### From Project Picori (work on the Vita)
 - The whole game, running natively.
 - **Widescreen.** Gameplay rooms fill the 16:9 screen when the room is wide
-  enough; smaller scenes get black bars.
+  enough; smaller scenes get black bars. On the Vita the extra columns are
+  also filled for skies and static backgrounds, fog, steam and light rays,
+  dark rooms, Mt Crenel's rain, the Minish path parallax and Biggoron.
 - **Settings menu** (graphics, audio, gameplay options, warp, randomizer,
   Picori's own cheats and "Reborn" tweaks), opened with **L+R**.
 - The startup launcher: pick the region/ROM and the language, and optionally
   skip the launcher on later starts.
-- Auto-save states (`state_auto_*.bin`) and the normal in-game save
-  (`tmc.sav`).
+- Save states (manual slots and auto-saves on area change), and the normal
+  in-game save (`tmc.sav`). On the Vita, save states are made and loaded only
+  during normal play, not with the game's menus open (a state made inside a
+  menu crashed when loaded).
+- **The randomizer**, with its logic file included in the VPK. Works with the
+  USA ROM; see [Randomizer](#randomizer).
 - Screen filters: **nearest** (the default and the recommended one) and
   **linear** run at full speed; **xBRZ** works but runs at about 7 fps on the
   Vita.
@@ -62,6 +68,7 @@ covers the Vita side.
   - Mysterious Shells always 999
   - All regular Kinstones, 99 of each red, blue and green piece (not the gold
     or story pieces; needs the Kinstone Bag)
+  - Cucco minigame timer doesn't decrease
 - **Change name...**, in the Cheats tab, renames Link at any time with the
   Vita keyboard. Allowed characters are letters, digits, space and `- . ,`, up
   to 6 characters. An empty name is ignored. **Save in-game afterwards** to
@@ -78,6 +85,11 @@ covers the Vita side.
 - Audio runs at 32 kHz in GBA-accurate mode. The engine skips silent tracks,
   so there is no crackling.
 - CPU/GPU clocks are raised to 444/222/222/166 MHz while the game runs.
+- The render threads share the scanlines dynamically, so a core slowed down
+  by the music or the system doesn't hold the frame back.
+- Fast lookups for the game's asset data (the old linear search made some
+  rooms drop to 14-20 fps: the Minish path to Melari's Mines, Veil Falls with
+  Biggoron, busy sprite scenes).
 - Result: about 55-60 fps in most gameplay. See [Known issues](#known-issues)
   for the slower spots.
 
@@ -90,21 +102,17 @@ Tested on a real PS Vita (HENkaku, installed with VitaShell), USA ROM, English:
 | First start: launcher, region/language choice, asset extraction | ✅ works (the first extraction is very slow, see below) |
 | Title screen, file select, new file, naming | ✅ |
 | Intro storybook, skipping it with Start | ✅ |
-| Gameplay up to and through the first dungeon (Deepwood Shrine) | ✅ |
+| **The whole game, start to finish, at 100%**: all dungeons, every item and upgrade, all figurines, all Kinstone fusions | ✅ |
 | Going between floors and rooms, stairs, room transitions | ✅ |
 | Sound effects and music | ✅ (32 kHz GBA-accurate) |
 | Widescreen in gameplay | ✅ |
 | Settings menu on L+R, warp tab, screen filters | ✅ |
+| Save states (manual, auto, loading) | ✅ |
 | Every cheat in the Cheats tab | ✅ |
 | Change name (including empty and cancelled input) | ✅ |
+| Randomizer: new seed, playing a randomized file | ✅ |
 
 **Not tested on the Vita:**
-- The rest of the game after the first dungeon.
-- The **randomizer** (Settings → Randomizer). It is built in, with its logic
-  file included, and it saves to `tmc.randomizer` so your normal save is
-  untouched. Generating a seed may pause the game for a few seconds. The Seed
-  text box can't open the Vita keyboard, so use **Roll new seed** or
-  **Random**. The "Copy" buttons do nothing on the Vita.
 - **EU/PAL ROMs** and the other languages. The code supports them (put the
   ROM in as `baserom_eu.gba`), but they haven't been tried.
 - Picori's extra item slots on □ / △, which are mapped but not tried.
@@ -113,17 +121,32 @@ Tested on a real PS Vita (HENkaku, installed with VitaShell), USA ROM, English:
 - PlayStation TV, suspending and resuming the Vita for a long time, and
   memory cards other than `ux0:`.
 
+## Randomizer
+
+1. On the file select screen, press **L** and tick **Enable Randomizer
+   Mode**. Change the randomizer settings there if you like (the choice is
+   remembered).
+2. Choose an **empty** save slot and name the file.
+3. The randomizer window opens with **Generate & Start** selected: press ✕
+   (or **START**). The game may pause for a few seconds while it builds the
+   seed. ○ cancels and starts a normal game in that slot instead.
+
+The seed is stored in `tmc.randomizer`, so your normal saves are untouched.
+The Seed text box can't open the Vita keyboard, so seeds are always random.
+The "Copy" buttons do nothing on the Vita.
+
 ## Known issues
 
 - **The first start is very slow.** The launcher extracts every graphic and
   sound from the ROM into `ux0:data/tmc/assets/`. On the Vita this can take a
   couple of hours, and the screen looks frozen the whole time. Leave it
   running. It happens only once; later starts take seconds.
-- **Some slower spots:**
-  - dungeon rooms with lighting or transparency effects run at about
-    40-48 fps;
-  - text boxes with HD dialogue on cost a few fps;
-  - the file select screen runs at about 30 fps.
+- **Some slower spots:** a few rooms with lighting or transparency effects
+  and Mt Crenel in the storm run at about 45-55 fps; text boxes with HD
+  dialogue on cost a few fps; the file select screen runs at about 30 fps.
+- **Widescreen:** a few special scenes may still be cut at the original
+  width on the right. The log names them (`[ws] ... has no widescreen fill`);
+  please report them with `log.txt`.
 - **Room transitions** briefly show the black side bars instead of
   widescreen. This is how Picori does it.
 - After the Vita keyboard (Change name) closes, the game can pause for a
@@ -147,7 +170,7 @@ Buttons can be rebound in the settings menu.
 
 ## Installing and playing
 
-1. Download `mc-vita-v1.0.0.vpk` from the
+1. Download `mc-vita-v1.1.0.vpk` from the
    [Releases](https://github.com/JackRuss9/mc-vita/releases) page (or build it
    yourself, see [Building](#building)) and install it with VitaShell. The
    .vpk contains only the program: no ROM, graphics, music or text from the
@@ -165,8 +188,8 @@ Everything lives in `ux0:data/tmc/`:
 | `baserom.gba` | your ROM |
 | `assets/`, `assets_src/`, `rom_data/` | extracted from the ROM on the first start |
 | `tmc.sav` | the in-game save |
-| `tmc.randomizer` | the randomizer's save |
-| `state_auto_*.bin` | auto-save states |
+| `tmc.randomizer` | the randomizer's seeds for your save slots |
+| `state_*.bin` | save states (manual slots and auto-saves) |
 | `config.json` | settings |
 | `cheats.txt` | which cheats are on |
 | `log.txt` | the log of the last run. Please attach it to bug reports |
@@ -189,8 +212,9 @@ needs into `deps/`: SDL3, Dear ImGui, fmt and nlohmann/json. The output is
 
 | Path | What it is |
 | --- | --- |
-| `build.sh` | downloads Picori at the pinned commit, applies the patch, builds |
-| `patches/picori/0001-ps-vita.patch` | every change to Picori's own files |
+| `build.sh` | downloads Picori at the pinned commit, applies the patches, builds |
+| `patches/picori/0001-ps-vita.patch` | the port itself: every change to Picori's own files for v1.0.0 |
+| `patches/picori/0002-...` to `0007-...` | the fixes and additions since (one per version, see NOTES.md) |
 | `vita/src/` | Vita start-up, logging, threads, cheats, name change, runtime fixes |
 | `vita/deps.sh` | builds SDL3, Dear ImGui, fmt and nlohmann/json for the Vita |
 | `vita/livearea/` | home-screen pictures (placeholders) |

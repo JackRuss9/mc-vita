@@ -249,3 +249,10 @@
   the sidebar, and Circle (gamepad B) cancelling into a normal new game. On
   the Vita the window now starts with a focused "Generate & Start" button,
   START as a shortcut, and the generator's error message under it.
+
+## v1.1.0 release (patches/picori/0007-v1.1.0-cucco-cheat.patch)
+- Full game played on the Vita at 100% (all items and upgrades, figurines,
+  Kinstone fusions), cheats and randomizer tested.
+- The "Cucco Timer Doesn't Decrease" cheat only had its checkbox; the
+  minigame timer (cuccoMinigame.c) now holds while it's on.
+- README and release/v1.1.0.md updated; version 01.10.

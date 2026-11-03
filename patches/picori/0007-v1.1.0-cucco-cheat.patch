@@ -1,0 +1,19 @@
+diff --git a/src/object/cuccoMinigame.c b/src/object/cuccoMinigame.c
+index ef2f4e49d..1f40815c9 100644
+--- a/src/object/cuccoMinigame.c
++++ b/src/object/cuccoMinigame.c
+@@ -181,6 +181,14 @@ void sub_080A1270(CuccoMinigameEntity* this) {
+ 
+     this->currentCuccos = numReturnedCuccos;
+     gPlayerState.field_0x27[0] = 0xff;
++#ifdef TMC_VITA
++    {
++        /* Cheats tab: "Cucco Timer Doesn't Decrease" (vita_cheats.h) */
++        extern bool TmcVita_Cheat(int id);
++        if (TmcVita_Cheat(9 /* TMC_CHEAT_CUCCO_TIMER */) && this->timer > 1)
++            this->timer++;
++    }
++#endif
+     if (--this->timer < 1) {
+         SoundReq(SFX_CUCCO_MINIGAME_BELL);
+         sub_08050384();
