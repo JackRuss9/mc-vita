@@ -17,7 +17,7 @@ include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 
 set(VITA_APP_NAME "The Minish Cap")
 set(VITA_TITLEID "TMCV00001")
-set(VITA_VERSION "01.02")
+set(VITA_VERSION "01.03")
 
 set(P ${CMAKE_SOURCE_DIR}/picori)
 set(D ${CMAKE_SOURCE_DIR}/deps)
@@ -157,4 +157,6 @@ vita_create_vpk(tmc.vpk ${VITA_TITLEID} eboot.bin
   FILE ${CMAKE_SOURCE_DIR}/vita/livearea/icon0.png sce_sys/icon0.png
        ${CMAKE_SOURCE_DIR}/vita/livearea/bg.png sce_sys/livearea/contents/bg.png
        ${CMAKE_SOURCE_DIR}/vita/livearea/startup.png sce_sys/livearea/contents/startup.png
-       ${CMAKE_SOURCE_DIR}/vita/livearea/template.xml sce_sys/livearea/contents/template.xml)
+       ${CMAKE_SOURCE_DIR}/vita/livearea/template.xml sce_sys/livearea/contents/template.xml
+       # the randomizer's logic (read from app0:, see rando_logic.cpp)
+       ${P}/assets/rando/default.logic assets/rando/default.logic)

@@ -222,3 +222,16 @@
     first column through TmcVita_WsPublishSlice.
 - Any enabled 32-column layer still without a fill is logged once per room:
   "[ws] area=.. room=..: BGn (control ....) has no widescreen fill".
+
+## v1.0.3 (patches/picori/0004-v1.0.3-widescreen-rando.patch)
+- Biggoron entering Veil Falls top from the left: with Link left of him the
+  slice offset is negative, and the PC fix skipped the update, leaving a stale
+  slice (his face boxed in). The slice is now copied per column from a signed
+  start, transparent outside his 128-column body buffer.
+- More BG3 wraps, from the [ws] log: 0x1e0c (darkness of dark rooms, e.g.
+  the cemetery: the right band was lit) and the mosaic bit ignored (Cloud
+  Tops' 0x1e47).
+- Randomizer: default.logic was not on the Vita (the data folder's assets/ is
+  the ROM extraction), so seeds couldn't be generated. It is in the VPK now
+  (app0:assets/rando/default.logic, an extra candidate on the Vita). The
+  native randomizer uses the USA ROM as its baseline.

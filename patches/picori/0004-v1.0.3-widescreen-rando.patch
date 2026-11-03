@@ -1,0 +1,111 @@
+diff --git a/port/port_linked_stubs.c b/port/port_linked_stubs.c
+index d2e269c0d..b75df8cb7 100644
+--- a/port/port_linked_stubs.c
++++ b/port/port_linked_stubs.c
+@@ -1346,7 +1346,7 @@ void TmcVita_WsPublishSlice(int bg, const void* src, s32 firstCol) {
+ }
+ 
+ static int Port_WidescreenSliceLive(int bg) {
+-    return sWsSlice[bg].src != NULL && sWsSlice[bg].col >= 0 && gTmcVitaWsFrame - sWsSlice[bg].frame <= 1;
++    return sWsSlice[bg].src != NULL && gTmcVitaWsFrame - sWsSlice[bg].frame <= 1;
+ }
+ 
+ static void Port_WidescreenShadow_PopulateSlice(int bg, u16 xOffset, u16* shadow) {
+@@ -1394,6 +1394,15 @@ static u16 Port_WidescreenBgControl(int bg) {
+     }
+ }
+ 
++/* BG3 controls (mosaic bit ignored) that hold a repeating texture or a flat
++ * fill: 0x1e07 static / animated backgrounds (skies; Cloud Tops' 0x1e47 is
++ * the mosaic one), 0x1e04 / 0x1e05 fog, steam, light rays, 0x1e0c the
++ * darkness of dark rooms (LightManager; the cemetery), whose hole around
++ * Link is a window, so the wrapped black covers the rest. */
++static int Port_WidescreenIsWrapBg3(u16 control) {
++    return control == 0x1e07 || control == 0x1e04 || control == 0x1e05 || control == 0x1e0c;
++}
++
+ /* Fill what we know how to fill; log (once per room and layer) any other
+  * enabled 32-column layer still cut at 240, to find the next cases. */
+ static void Port_WidescreenShadow_Extras(void) {
+@@ -1415,7 +1424,7 @@ static void Port_WidescreenShadow_Extras(void) {
+ 
+     /* wraps: BG3 static / animated backgrounds and overlays */
+     if (virtuappu_mode1_ws_shadow[3] == NULL && (dispcnt & DISPCNT_BG3_ON) &&
+-        (gScreen.bg3.control == 0x1e07 || gScreen.bg3.control == 0x1e04 || gScreen.bg3.control == 0x1e05)) {
++        Port_WidescreenIsWrapBg3((u16)(gScreen.bg3.control & ~0x40u))) {
+         Port_WidescreenShadow_PopulateWrap(3, gScreen.bg3.control, sWsShadowOverlay);
+     }
+     /* Mt Crenel's storm rain on BG1 (WeatherChangeManager unbinds the top map) */
+diff --git a/port/rando/rando_logic.cpp b/port/rando/rando_logic.cpp
+index 9d9fec34e..e4971fcb7 100644
+--- a/port/rando/rando_logic.cpp
++++ b/port/rando/rando_logic.cpp
+@@ -1581,6 +1581,11 @@ extern "C" bool RandoLogic_LoadDefaultFiles(void) {
+ 
+     static const char* const kCandidates[] = {
+         "assets/rando/default.logic",
++#ifdef TMC_VITA
++        /* bundled in the VPK (ux0:data/tmc/assets is the ROM extraction,
++         * which doesn't contain it); a copy in the data folder wins */
++        "app0:assets/rando/default.logic",
++#endif
+ 
+         "dist/USA/assets/rando/default.logic",
+         "dist/EU/assets/rando/default.logic",
+diff --git a/src/npc/bigGoron.c b/src/npc/bigGoron.c
+index b5eeaf91b..d564da70d 100644
+--- a/src/npc/bigGoron.c
++++ b/src/npc/bigGoron.c
+@@ -246,21 +246,47 @@ void sub_0806D164(Entity* this) {
+          * read stays within the 0x4000 buffer. Skip the update entirely
+          * if the entity is far enough offscreen that we can't show a
+          * meaningful slice — nothing visible to update anyway. */
++#ifdef TMC_VITA
++        /* Copy the slice column by column with a signed start: when Link is
++         * left of Biggoron, xOffset is negative and BG1's left columns lie
++         * before his body (transparent). Skipping the update then (the fix
++         * above, still used on other builds) left a stale slice on screen --
++         * his face cut into a box when entering Veil Falls top from the left.
++         * Columns past the 128-wide body buffer are transparent too. */
++        (void)startOff;
++        {
++            const s32 col0 = ((s32)xOffset >> 4) * 2;
++            const u16* body = (const u16*)gUnk_02006F00;
++            u16* dst = (u16*)gMapDataTopSpecial;
++            s32 row, c;
++            for (row = 0; row < 0x20; row++) {
++                for (c = 0; c < 0x20; c++) {
++                    const s32 col = col0 + c;
++                    dst[row * 0x20 + c] = (col >= 0 && col < 0x80) ? body[row * 0x80 + col] : 0;
++                }
++            }
++            /* first body column shown in BG1 column 0, for the widescreen
++             * reveal past x = 240 (port_linked_stubs.c) */
++            TmcVita_WsPublishSlice(1, gUnk_02006F00, col0);
++        }
++#else
+         if (startOff > 0x4000u - 0x2000u) {
+             gScreen.bg1.updated = 1;
+             return;
+         }
+-#ifdef TMC_VITA
+-        /* first gUnk_02006F00 column (u16) shown in BG1 column 0, for the
+-         * widescreen reveal past x = 240 (Port_Widescreen_UpdateShadows) */
+-        TmcVita_WsPublishSlice(1, gUnk_02006F00, (s32)(startOff / 2));
+-#endif
++        for (index = 0x20, ptr = &puVar1[startOff]; index != 0; index--) {
++            DmaCopy16(3, ptr, puVar2, 0x20 * 2);
++            ptr += 0x100;
++            puVar2 += 0x40;
++        }
+ #endif
++#else
+         for (index = 0x20, ptr = &puVar1[startOff]; index != 0; index--) {
+             DmaCopy16(3, ptr, puVar2, 0x20 * 2);
+             ptr += 0x100;
+             puVar2 += 0x40;
+         }
++#endif
+     }
+     gScreen.bg1.updated = 1;
+ }
