@@ -87,6 +87,8 @@ covers the Vita side.
 - CPU/GPU clocks are raised to 444/222/222/166 MHz while the game runs.
 - The render threads share the scanlines dynamically, so a core slowed down
   by the music or the system doesn't hold the frame back.
+- HD dialogue text boxes are built once per change instead of every frame,
+  and the file select no longer loads randomizer seeds while the cursor moves.
 - Fast lookups for the game's asset data (the old linear search made some
   rooms drop to 14-20 fps: the Minish path to Melari's Mines, Veil Falls with
   Biggoron, busy sprite scenes).
@@ -142,8 +144,7 @@ The "Copy" buttons do nothing on the Vita.
   couple of hours, and the screen looks frozen the whole time. Leave it
   running. It happens only once; later starts take seconds.
 - **Some slower spots:** a few rooms with lighting or transparency effects
-  and Mt Crenel in the storm run at about 45-55 fps; text boxes with HD
-  dialogue on cost a few fps; the file select screen runs at about 30 fps.
+  and Mt Crenel in the storm run at about 45-55 fps.
 - **Widescreen:** a few special scenes may still be cut at the original
   width on the right. The log names them (`[ws] ... has no widescreen fill`);
   please report them with `log.txt`.
@@ -170,7 +171,7 @@ Buttons can be rebound in the settings menu.
 
 ## Installing and playing
 
-1. Download `mc-vita-v1.1.0.vpk` from the
+1. Download `mc-vita-v1.1.2.vpk` from the
    [Releases](https://github.com/JackRuss9/mc-vita/releases) page (or build it
    yourself, see [Building](#building)) and install it with VitaShell. The
    .vpk contains only the program: no ROM, graphics, music or text from the
