@@ -235,3 +235,10 @@
   the ROM extraction), so seeds couldn't be generated. It is in the VPK now
   (app0:assets/rando/default.logic, an extra candidate on the Vita). The
   native randomizer uses the USA ROM as its baseline.
+
+## v1.0.4 (patches/picori/0005-v1.0.4-rando-mode.patch)
+- Randomizer: a new file started vanilla when "Enable Randomizer Mode" had
+  been turned on in an earlier session. Port_RandoFileMenu_ShouldOpenForNewFile
+  read sRandoOptionEnabled without EnsureRandoOptionLoaded (only the file
+  select's L sidebar loaded the saved setting). The log now says
+  "[RANDO] new file: randomizer mode on/off" and the result of Generate.

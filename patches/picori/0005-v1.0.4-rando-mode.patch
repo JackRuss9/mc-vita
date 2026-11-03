@@ -1,0 +1,28 @@
+diff --git a/port/rando/rando_file_menu.c b/port/rando/rando_file_menu.c
+index b76b66cbb..565b9881b 100644
+--- a/port/rando/rando_file_menu.c
++++ b/port/rando/rando_file_menu.c
+@@ -220,6 +220,9 @@ void Port_RandoFileMenu_CommitAndStart(void) {
+     seed = CurrentSeedValue();
+     RandoLogic_ClearOverrides();
+     RandoStatus result = Rando_GenerateSeed(seed, &settings, &chosen);
++#ifdef TMC_VITA
++    fprintf(stderr, "[RANDO] generate seed %llu: result %d\n", (unsigned long long)chosen, (int)result);
++#endif
+     if (result == RANDO_OK) {
+         if (!Port_RandoSave_SaveActiveSlot(sMenu.save_slot)) {
+             SDL_snprintf(sMenu.status, sizeof(sMenu.status), "Generated seed, but sidecar save failed.");
+@@ -252,6 +255,13 @@ bool Port_RandoFileMenu_ShouldOpenForNewFile(void) {
+         const char* env = getenv("TMC_RANDO_FILE_MENU");
+         sEnabledCached = (env == NULL || env[0] == '\0' || env[0] != '0') ? 1 : 0;
+     }
++#ifdef TMC_VITA
++    /* The saved "Randomizer Mode" setting was only read when the file
++     * select's L sidebar was drawn; with it turned on in an earlier session
++     * and the sidebar not opened this time, new files started vanilla. */
++    EnsureRandoOptionLoaded();
++    fprintf(stderr, "[RANDO] new file: randomizer mode %s\n", sRandoOptionEnabled ? "on" : "off");
++#endif
+     return sEnabledCached != 0 && sRandoOptionEnabled;
+ }
+ 
