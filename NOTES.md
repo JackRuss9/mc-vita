@@ -242,3 +242,10 @@
   read sRandoOptionEnabled without EnsureRandoOptionLoaded (only the file
   select's L sidebar loaded the saved setting). The log now says
   "[RANDO] new file: randomizer mode on/off" and the result of Generate.
+
+## v1.0.5 (patches/picori/0006-v1.0.5-rando-start.patch)
+- Randomizer new file (log of v1.0.4: "randomizer mode on", but no Generate):
+  the window opened with nothing focused, Generate & Start at the very end of
+  the sidebar, and Circle (gamepad B) cancelling into a normal new game. On
+  the Vita the window now starts with a focused "Generate & Start" button,
+  START as a shortcut, and the generator's error message under it.

@@ -1,0 +1,74 @@
+diff --git a/port/port_imgui_menu.cpp b/port/port_imgui_menu.cpp
+index 199bc65a5..28f14f7b5 100644
+--- a/port/port_imgui_menu.cpp
++++ b/port/port_imgui_menu.cpp
+@@ -530,6 +530,9 @@ extern "C" {
+ void SetTask(unsigned int task);
+ }
+ extern "C" int Port_QuickSave_SaveSlot(int slot);
++#ifdef TMC_VITA
++extern "C" int Port_QuickSave_CanSaveNow(void);
++#endif
+ extern "C" int Port_QuickSave_AutoOnAreaChangeEnabled(void);
+ extern "C" void Port_QuickSave_SetAutoOnAreaChange(int on);
+ 
+@@ -539,7 +542,10 @@ static void DoQuitToTitle(bool saveFirst) {
+          * the user pressing F5 first. They can still F6-load it on
+          * the next launch. */
+         if (!Port_QuickSave_SaveSlot(0)) {
+-            Port_DebugMenu_ToastFromExternal("Save failed. Check free space and folder permissions.");
++#ifdef TMC_VITA
++            if (Port_QuickSave_CanSaveNow())
++#endif
++                Port_DebugMenu_ToastFromExternal("Save failed. Check free space and folder permissions.");
+             return;
+         }
+     }
+@@ -1131,7 +1137,10 @@ static void DrawQuitModal(void) {
+                 sQuitModalConfirmed = true;
+                 ImGui::CloseCurrentPopup();
+             } else {
+-                Port_DebugMenu_ToastFromExternal("Save failed. Check free space and folder permissions.");
++#ifdef TMC_VITA
++                if (Port_QuickSave_CanSaveNow())
++#endif
++                    Port_DebugMenu_ToastFromExternal("Save failed. Check free space and folder permissions.");
+             }
+         }
+         ImGui::SameLine();
+@@ -1174,6 +1183,35 @@ static void DrawRandoFileMenuModal(void) {
+ 
+         ImGui::TextColored(ImVec4(0.78f, 0.95f, 0.78f, 1.0f), "PORT & RANDOMIZER SETUP");
+         ImGui::Separator();
++#ifdef TMC_VITA
++        /* New randomizer file: Generate & Start sat at the end of a long
++         * sidebar with nothing focused, and Circle (gamepad B) cancelled --
++         * which leaves the slot as a normal new game. Put the action first,
++         * focus it, and take START as a shortcut. */
++        {
++            static bool sFocusedForOpen = false;
++            if (forceOpen && Port_RandoFileMenu_IsOpen()) {
++                ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.4f, 1.0f), "New randomizer file");
++                ImGui::TextWrapped("START or X on the button below: generate the seed and start (the game may "
++                                   "pause a few seconds).  O: cancel (normal game).");
++                if (ImGui::Button("Generate & Start##vita", ImVec2(-1, 34)) ||
++                    ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)) {
++                    Port_RandoFileMenu_CommitAndStart();
++                }
++                if (!sFocusedForOpen) {
++                    ImGui::SetItemDefaultFocus();
++                    ImGui::SetKeyboardFocusHere(-1);
++                    sFocusedForOpen = true;
++                }
++                const char* st = Port_RandoFileMenu_Status();
++                if (st != nullptr && st[0] != '\0')
++                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "%s", st);
++                ImGui::Separator();
++            } else {
++                sFocusedForOpen = false;
++            }
++        }
++#endif
+ 
+         // Randomizer checkbox (toggle rando vs vanilla)
+         bool randoEnabled = Port_RandoFileMenu_GetRandoOptionEnabled();
