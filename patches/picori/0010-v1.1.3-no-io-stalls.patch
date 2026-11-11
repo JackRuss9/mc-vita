@@ -1,0 +1,207 @@
+diff --git a/port/port_audio.c b/port/port_audio.c
+index 2ab0b74..33825cf 100644
+--- a/port/port_audio.c
++++ b/port/port_audio.c
+@@ -163,12 +163,35 @@ static void Port_Audio_PostProcess(const float* in, int16_t* out, int frames) {
+ 
+ extern Main gMain;
+ 
++#ifdef TMC_VITA
++/* The audio callback's once-a-second report, printed by the main thread
++ * (Port_Audio_LogTraceReport, from the [profile] report) so the audio
++ * thread never writes to log.txt. One report in flight: the callback fills
++ * it only when the main thread has taken the previous one. */
++static struct {
++    int cb, underruns;
++    double req, maxgap, workAvg, workMax;
++} sTraceReport;
++static int sTraceReady;
++
++void Port_Audio_LogTraceReport(void) {
++    if (!__atomic_load_n(&sTraceReady, __ATOMIC_ACQUIRE))
++        return;
++    fprintf(stderr, "[audio] 1s: %d cb, req=%.1fms maxgap=%.1fms underruns=%d | work avg=%.1fms max=%.1fms\n",
++            sTraceReport.cb, sTraceReport.req, sTraceReport.maxgap, sTraceReport.underruns, sTraceReport.workAvg,
++            sTraceReport.workMax);
++    __atomic_store_n(&sTraceReady, 0, __ATOMIC_RELEASE);
++}
++#endif
++
+ static void Port_Audio_Feed(void* userdata, SDL_AudioStream* stream, int additional_amount, int total_amount) {
+     int remaining = additional_amount;
+     (void)userdata;
+     (void)total_amount;
+ #ifdef TMC_VITA
+-    const bool trace = true; /* once-per-second report in log.txt while tuning */
++    /* once-a-second report, only with ux0:data/tmc/debug_log (vita_start.c) */
++    extern int TmcVita_DebugLog(void);
++    const bool trace = TmcVita_DebugLog() != 0;
+ #else
+     const bool trace = (Port_DebugVerbose || getenv("TMC_AUDIO_TRACE"));
+ #endif
+@@ -196,9 +219,27 @@ static void Port_Audio_Feed(void* userdata, SDL_AudioStream* stream, int additio
+         workStart = now;
+         if (now - sWindowNs >= 1000000000ULL) {
+             if (sCbCount) {
++#ifdef TMC_VITA
++                /* No I/O on the audio thread on the Vita: log.txt is on the
++                 * memory card, and one write there can block for 0.3-1.6 s
++                 * when the card is busy (an autosave being written), which
++                 * stalled the audio and, through stderr's lock, the game
++                 * (Deepwood Shrine: 13 fps, 4.8 s frame). Hand the numbers
++                 * to the main thread, which prints them with [profile]. */
++                if (!__atomic_load_n(&sTraceReady, __ATOMIC_ACQUIRE)) {
++                    sTraceReport.cb = sCbCount;
++                    sTraceReport.req = sReqMs;
++                    sTraceReport.maxgap = sMaxGap;
++                    sTraceReport.underruns = sUnderruns;
++                    sTraceReport.workAvg = sSumWorkMs / sCbCount;
++                    sTraceReport.workMax = sMaxWorkMs;
++                    __atomic_store_n(&sTraceReady, 1, __ATOMIC_RELEASE);
++                }
++#else
+                 fprintf(stderr,
+                         "[audio] 1s: %d cb, req=%.1fms maxgap=%.1fms underruns=%d | work avg=%.1fms max=%.1fms\n",
+                         sCbCount, sReqMs, sMaxGap, sUnderruns, sSumWorkMs / sCbCount, sMaxWorkMs);
++#endif
+             }
+             sWindowNs = now;
+             sMaxGap = 0.0;
+diff --git a/port/port_bios.c b/port/port_bios.c
+index 0784a24..c8b4534 100644
+--- a/port/port_bios.c
++++ b/port/port_bios.c
+@@ -763,7 +763,9 @@ static void Port_ProfileReportMaybe(void) {
+ #ifdef TMC_VITA
+         {
+             extern void TmcVita_LogStatus(void);
++            extern void Port_Audio_LogTraceReport(void);
+             TmcVita_LogStatus();
++            Port_Audio_LogTraceReport();
+         }
+ #endif
+         fprintf(stderr,
+@@ -782,7 +784,11 @@ static void Port_ProfileReportMaybe(void) {
+ int Port_Profile_Enabled(void) {
+     static int en = -1;
+ #ifdef TMC_VITA
+-    en = 1; /* frame timings in log.txt while the Vita port is being tuned */
++    {
++        /* frame timings in log.txt only with ux0:data/tmc/debug_log (vita_start.c) */
++        extern int TmcVita_DebugLog(void);
++        en = TmcVita_DebugLog();
++    }
+ #endif
+     if (en < 0) {
+         const char* e = getenv("TMC_PROFILE");
+diff --git a/port/port_quicksave.c b/port/port_quicksave.c
+index 55869d2..6ef4f08 100644
+--- a/port/port_quicksave.c
++++ b/port/port_quicksave.c
+@@ -477,6 +477,85 @@ static int WriteSlotToDisk(int slot) {
+     return 1;
+ }
+ 
++#ifdef TMC_VITA
++/* Auto-save ring writes on a background thread. On the Vita the 400 KB
++ * write + fsync to the memory card took 60-85 ms on the game thread at
++ * every door, and seconds when the card was busy (Deepwood Shrine: one
++ * 4.8 s frame, 13 fps). The snapshot is still captured on the game thread
++ * (a RAM copy); only the file write moves. A slot queued or being written
++ * is never recaptured (TakeAutoSnapshot skips it), so the worker reads a
++ * stable buffer. Manual save states stay synchronous. */
++static SDL_Mutex* sWriterLock;
++static SDL_Condition* sWriterCond;
++static SDL_Thread* sWriterThread;
++static unsigned sWriterQueued; /* bit per slot waiting to be written */
++static unsigned sWriterBusy;   /* bit of the slot being written */
++
++static int SDLCALL AutoWriterMain(void* unused) {
++    (void)unused;
++    for (;;) {
++        SDL_LockMutex(sWriterLock);
++        while (sWriterQueued == 0)
++            SDL_WaitCondition(sWriterCond, sWriterLock);
++        int slot = 0;
++        while (!(sWriterQueued & (1u << slot)))
++            slot++;
++        sWriterQueued &= ~(1u << slot);
++        sWriterBusy = 1u << slot;
++        SDL_UnlockMutex(sWriterLock);
++
++        const Uint64 t0 = SDL_GetTicksNS();
++        const int ok = WriteSlotToDisk(slot);
++        const double ms = (double)(SDL_GetTicksNS() - t0) / 1e6;
++
++        SDL_LockMutex(sWriterLock);
++        sWriterBusy = 0;
++        SDL_UnlockMutex(sWriterLock);
++        if (ok)
++            fprintf(stderr, "[autosave] ring slot %d written (%zu bytes, %.0f ms, background)\n", slot,
++                    sSlots[slot].bytes, ms);
++    }
++    return 0;
++}
++
++static int AutoWriterStart(void) {
++    if (sWriterThread)
++        return 1;
++    sWriterLock = SDL_CreateMutex();
++    sWriterCond = SDL_CreateCondition();
++    if (sWriterLock && sWriterCond) {
++        SDL_PropertiesID props = SDL_CreateProperties();
++        SDL_SetPointerProperty(props, SDL_PROP_THREAD_CREATE_ENTRY_FUNCTION_POINTER, (void*)AutoWriterMain);
++        SDL_SetStringProperty(props, SDL_PROP_THREAD_CREATE_NAME_STRING, "tmc_autosave");
++        SDL_SetNumberProperty(props, SDL_PROP_THREAD_CREATE_STACKSIZE_NUMBER, 64 * 1024);
++        sWriterThread = SDL_CreateThreadWithProperties(props);
++        SDL_DestroyProperties(props);
++    }
++    if (!sWriterThread) {
++        fprintf(stderr, "[autosave] no background writer (%s); writing on the game thread\n", SDL_GetError());
++        return 0;
++    }
++    return 1;
++}
++
++/* 1 = this slot is queued or being written (don't touch its buffer) */
++static int AutoWriterHolds(int slot) {
++    if (!sWriterThread)
++        return 0;
++    SDL_LockMutex(sWriterLock);
++    const int held = ((sWriterQueued | sWriterBusy) & (1u << slot)) != 0;
++    SDL_UnlockMutex(sWriterLock);
++    return held;
++}
++
++static void AutoWriterQueue(int slot) {
++    SDL_LockMutex(sWriterLock);
++    sWriterQueued |= 1u << slot;
++    SDL_SignalCondition(sWriterCond);
++    SDL_UnlockMutex(sWriterLock);
++}
++#endif
++
+ /* Reads the fixed 4-field slot header (magic, version, total, saved_at).
+  * Returns 1 if all four fields read, 0 on short read. Field values are
+  * not validated and no diagnostics are emitted — callers decide. */
+@@ -710,6 +789,20 @@ static void TakeAutoSnapshot(const char* reason) {
+     if (sAutoNextSlot >= AUTO_SLOT_BASE + NUM_AUTO_SLOTS) {
+         sAutoNextSlot = AUTO_SLOT_BASE;
+     }
++#ifdef TMC_VITA
++    if (AutoWriterStart()) {
++        if (AutoWriterHolds(slot)) {
++            /* the card is still busy with this slot's previous write */
++            fprintf(stderr, "[autosave] ring slot %d still being written; skipped (%s)\n", slot, reason);
++            return;
++        }
++        if (!Port_QuickSave_MainIsPlainGameplay(&gMain) || !Snapshot_Capture(&sSlots[slot]))
++            return;
++        AutoWriterQueue(slot);
++        fprintf(stderr, "[autosave] ring slot %d captured (%s)\n", slot, reason);
++        return;
++    }
++#endif
+     if (Port_QuickSave_SaveSlot(slot)) {
+         fprintf(stderr, "[autosave] saved to ring slot %d (%s)\n", slot, reason);
+     }

@@ -89,6 +89,10 @@ covers the Vita side.
   by the music or the system doesn't hold the frame back.
 - HD dialogue text boxes are built once per change instead of every frame,
   and the file select no longer loads randomizer seeds while the cursor moves.
+- No memory-card stalls: auto-saves are written in the background, the audio
+  thread never writes to the log, and the timing reports in log.txt are off
+  unless you create `ux0:data/tmc/debug_log` (they caused drops to 13 fps in
+  Deepwood Shrine when the card was busy).
 - Fast lookups for the game's asset data (the old linear search made some
   rooms drop to 14-20 fps: the Minish path to Melari's Mines, Veil Falls with
   Biggoron, busy sprite scenes).
@@ -171,7 +175,7 @@ Buttons can be rebound in the settings menu.
 
 ## Installing and playing
 
-1. Download `mc-vita-v1.1.2.vpk` from the
+1. Download `mc-vita-v1.1.3.vpk` from the
    [Releases](https://github.com/JackRuss9/mc-vita/releases) page (or build it
    yourself, see [Building](#building)) and install it with VitaShell. The
    .vpk contains only the program: no ROM, graphics, music or text from the

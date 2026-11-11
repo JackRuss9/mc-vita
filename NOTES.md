@@ -271,3 +271,26 @@
   and re-checks the table: ~350-500 ms each time), and moving off it reset to
   vanilla. Cursor previews (sub_08050AFC) now skip the randomizer part; the
   seed is loaded when the slot is chosen with A / START.
+
+## v1.1.3 (patches/picori/0010-v1.1.3-no-io-stalls.patch)
+- Deepwood Shrine at 13 fps (one 4.8 s frame): memory-card stalls. The audio
+  callback wrote its once-a-second [audio] line to the unbuffered log.txt
+  (270-400 ms per write while the card was busy, 1.6 s once), and every room
+  change wrote a 407 KB autosave + fsync on the game thread (60-85 ms per
+  door normally, seconds then). The game thread's own log lines waited
+  behind the audio thread on stderr's lock.
+  - The audio callback only records; the main thread prints [audio] with
+    [profile] (one line per 2 s).
+  - Auto-save ring: captured on the game thread, written by a low-priority
+    thread; a slot still queued or being written is skipped, not waited for.
+  - Timing reports ([profile], [status], [entities], [present], [ppu],
+    [audio]) and the unbuffered log only with ux0:data/tmc/debug_log; else
+    log.txt is written in 8 KB blocks (Picori's own Deepwood debug lines,
+    [POTBRIDGE] ~7 a second, were each a card write).
+- Text boxes with HD dialogue still cost ~7-9 ms a frame (43 fps; barrel
+  room log: game frozen behind a box, menus/overlays 9.37 ms). The v1.1.1
+  cache saves the build, but the box's many small shapes still go through
+  SDL_RenderGeometry every frame. Drawing it once into a texture would fix
+  it, but SDL's Vita renderer ignores render-target changes mid-frame
+  (VITA_GXM_SetRenderTarget is a no-op; one GXM scene per frame). Left as
+  is: HD dialogue is off by default and can be turned off in Display.
