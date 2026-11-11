@@ -1,0 +1,74 @@
+diff --git a/src/enemy/gleerok.c b/src/enemy/gleerok.c
+index abe3fae..76f1a97 100644
+--- a/src/enemy/gleerok.c
++++ b/src/enemy/gleerok.c
+@@ -1286,6 +1286,11 @@ void sub_0802E1D0(GleerokEntity* this) {
+     sub_0802E518(this);
+ }
+ 
++#ifdef TMC_VITA
++/* frames the lava has been fully up (sub_0802E300's 25 s safety net) */
++static u16 sGleerokFloodFrames;
++#endif
++
+ void sub_0802E300(GleerokEntity* this) {
+     u32 dir, tmp;
+     u32 index;
+@@ -1319,6 +1324,49 @@ void sub_0802E300(GleerokEntity* this) {
+      *   unk_83 = 0  →  fade-out (lava rising, u74 climbing to 0x10)
+      *   unk_83 = 1  →  fade-in  (lava receding, u75 climbing to 0x10)
+      * sub_0802E1D0 sets unk_83=0 when entering the submerged splash path. */
++#ifdef TMC_VITA
++    /* The GBA's own sequence (zeldaret decomp), not Issue #51's rewrite below.
++     * The lava fades in (u74 0->0x10) and then STAYS opaque while the four
++     * GLEEROK_PARTICLE lava sprites grow over the room and shrink back; the
++     * last one ends by setting our u7c to 0 (gleerokParticle.c Action4,
++     * GE_FIELD(parent, field_0x7c)), which starts the fade-out and the
++     * resurfacing. The rewrite started the fade-out as soon as the fade-in
++     * ended, ~30 frames before the sprites even start to grow, so the rising
++     * lava was only a faint shadow. On the Vita (32-bit) the entity layouts
++     * are the GBA's, so that hand-off works as on the GBA. In case it ever
++     * doesn't come (Issue #51's freeze), resurface anyway after 25 s. */
++    if ((this->unk_79 & 0x80) == 0) {
++        this->unk_7c.HALF.LO--;
++    } else {
++        if (this->unk_74 != 0x10) {
++            sGleerokFloodFrames = 0;
++            if (this->unk_7c.HALF_U.LO) {
++                --this->unk_7c.HALF_U.LO;
++                if (this->unk_7c.HALF_U.LO == 0) {
++                    this->unk_7c.HALF_U.LO = 0xb;
++                    this->unk_75--;
++                    this->unk_74++;
++                    gScreen.controls.alphaBlend = this->unk_74 | (this->unk_75 << 8);
++                }
++            }
++        } else if (this->unk_7c.HALF_U.LO != 0 && ++sGleerokFloodFrames >= 25 * 60) {
++            fprintf(stderr, "[gleerok] lava particles never signalled; resurfacing\n");
++            this->unk_7c.HALF_U.LO = 0;
++        }
++    }
++
++    if (this->unk_7c.HALF_U.LO == 0) {
++        if (this->unk_79 & 0x80) {
++            if (this->unk_75 != 0x10) {
++                this->unk_7c.HALF_U.LO = 0xb;
++                this->unk_75++;
++                this->unk_74--;
++                gScreen.controls.alphaBlend = this->unk_74 | (this->unk_75 << 8);
++                return;
++            }
++        }
++
++#else
+     if ((this->unk_79 & 0x80) == 0) {
+         this->unk_7c.HALF.LO--;
+     } else if (this->unk_7c.HALF_U.LO) {
+@@ -1352,6 +1400,7 @@ void sub_0802E300(GleerokEntity* this) {
+             this->unk_83 = 0;
+         }
+ 
++#endif
+         this->unk_79 &= ~0x80;
+         heap = this->unk_84;
+         dir = GetAnimationStateForDirection4(GetFacingDirection(super, &gPlayerEntity.base)) << 3;

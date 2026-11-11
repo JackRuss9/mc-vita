@@ -294,3 +294,15 @@
   it, but SDL's Vita renderer ignores render-target changes mid-frame
   (VITA_GXM_SetRenderTarget is a no-op; one GXM scene per frame). Left as
   is: HD dialogue is off by default and can be turned off in Display.
+
+## v1.1.4 (patches/picori/0011-v1.1.4-gleerok-lava.patch)
+- Gleerok (Cave of Flames boss): when it dives after being hit, the lava that
+  floods the room was only a faint shadow. Not the renderer: Picori's fix for
+  its Issue #51 (sub_0802E300 in gleerok.c) starts the lava's fade-out as soon
+  as its fade-in ends, ~30 frames before the four GLEEROK_PARTICLE lava
+  sprites start to grow, so they grew almost transparent. On the GBA the
+  lava stays opaque until the last particle hands back (Action4 sets the
+  parent's u7c to 0), then fades out and Gleerok resurfaces. The Vita build
+  uses the GBA sequence again (its entity layouts are the GBA's, so the
+  hand-off works), with a 25 s safety net that resurfaces Gleerok if the
+  hand-off never comes ([gleerok] line in log.txt).
