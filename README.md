@@ -176,7 +176,7 @@ Buttons can be rebound in the settings menu.
 
 ## Installing and playing
 
-1. Download `mc-vita-v1.1.3.vpk` from the
+1. Download `mc-vita-v1.1.4.vpk` from the
    [Releases](https://github.com/JackRuss9/mc-vita/releases) page (or build it
    yourself, see [Building](#building)) and install it with VitaShell. The
    .vpk contains only the program: no ROM, graphics, music or text from the
