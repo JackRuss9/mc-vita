@@ -9,6 +9,10 @@
 #
 #   ./build.sh            build (only what changed)
 #   ./build.sh --clean    delete build/ first
+#   ./build.sh --my-art   use your own home-screen pictures from livearea/
+#                         (vita/livearea/make.py); for your own builds only,
+#                         a plain ./build.sh (e.g. for a release) uses the
+#                         placeholders
 #   JOBS=2 ./build.sh     fewer parallel compiler jobs
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -23,7 +27,18 @@ for tool in git cmake python3; do
   command -v "$tool" >/dev/null || { echo "ERROR: $tool is not installed (sudo apt install $tool)."; exit 1; }
 done
 
-if [[ "${1:-}" == "--clean" ]]; then
+CLEAN=0
+ART="$PWD/vita/livearea"
+for arg in "$@"; do
+  case "$arg" in
+    --clean) CLEAN=1 ;;
+    --my-art)
+      [[ -f livearea/icon0.png ]] || { echo "ERROR: no livearea/ yet: run python3 vita/livearea/make.py first."; exit 1; }
+      ART="$PWD/livearea" ;;
+    *) echo "ERROR: unknown option $arg (--clean, --my-art)"; exit 1 ;;
+  esac
+done
+if [[ $CLEAN == 1 ]]; then
   rm -rf "$B"
 fi
 
@@ -56,8 +71,12 @@ bash vita/deps.sh
 
 echo "== Configuring"
 cmake -S . -B "$B" -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
-  -DCMAKE_BUILD_TYPE=Release -DTMC_VITA_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  -DCMAKE_BUILD_TYPE=Release -DTMC_LIVEAREA_DIR="$ART" -DTMC_VITA_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 echo "== Building with $JOBS jobs"
 cmake --build "$B" -j "$JOBS"
 echo
-echo "SUCCESS: $B/tmc.vpk"
+if [[ "$ART" == "$PWD/livearea" ]]; then
+  echo "SUCCESS: $B/tmc.vpk (with your own home-screen pictures: don't publish this one)"
+else
+  echo "SUCCESS: $B/tmc.vpk"
+fi

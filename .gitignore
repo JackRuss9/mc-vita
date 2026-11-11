@@ -1,3 +1,7 @@
 /build/
 /picori/
 /deps/
+# your own home-screen pictures (vita/livearea/make.py, ./build.sh --my-art)
+/livearea/
+*.jpg
+*.jpeg

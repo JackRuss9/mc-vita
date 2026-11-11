@@ -150,13 +150,19 @@ endforeach()
 # Extended memory (ATTRIBUTE2=12): more RAM for the game.
 set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
 
+# The home-screen pictures: the placeholders in vita/livearea/, or your own
+# (build.sh --my-art: livearea/ at the top, made by vita/livearea/make.py and
+# never committed, see .gitignore).
+set(TMC_LIVEAREA_DIR "${CMAKE_SOURCE_DIR}/vita/livearea" CACHE PATH "LiveArea pictures folder")
+message(STATUS "LiveArea pictures: ${TMC_LIVEAREA_DIR}")
+
 vita_create_self(eboot.bin tmc UNSAFE)
 vita_create_vpk(tmc.vpk ${VITA_TITLEID} eboot.bin
   VERSION ${VITA_VERSION}
   NAME ${VITA_APP_NAME}
-  FILE ${CMAKE_SOURCE_DIR}/vita/livearea/icon0.png sce_sys/icon0.png
-       ${CMAKE_SOURCE_DIR}/vita/livearea/bg.png sce_sys/livearea/contents/bg.png
-       ${CMAKE_SOURCE_DIR}/vita/livearea/startup.png sce_sys/livearea/contents/startup.png
-       ${CMAKE_SOURCE_DIR}/vita/livearea/template.xml sce_sys/livearea/contents/template.xml
+  FILE ${TMC_LIVEAREA_DIR}/icon0.png sce_sys/icon0.png
+       ${TMC_LIVEAREA_DIR}/bg.png sce_sys/livearea/contents/bg.png
+       ${TMC_LIVEAREA_DIR}/startup.png sce_sys/livearea/contents/startup.png
+       ${TMC_LIVEAREA_DIR}/template.xml sce_sys/livearea/contents/template.xml
        # the randomizer's logic (read from app0:, see rando_logic.cpp)
        ${P}/assets/rando/default.logic assets/rando/default.logic)

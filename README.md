@@ -156,7 +156,8 @@ The "Copy" buttons do nothing on the Vita.
   widescreen. This is how Picori does it.
 - After the Vita keyboard (Change name) closes, the game can pause for a
   second.
-- The LiveArea pictures (icon, background) are placeholders.
+- The LiveArea pictures (icon, background) are placeholders. You can use
+  your own in your builds; see [Your own home-screen pictures](#your-own-home-screen-pictures).
 
 ## Controls
 
@@ -212,6 +213,25 @@ The first run downloads Project Picori into `picori/` and the libraries it
 needs into `deps/`: SDL3, Dear ImGui, fmt and nlohmann/json. The output is
 `build/tmc.vpk`. The log prints the commit it was built from (`[vita] build
 <commit>`), which helps confirm you are running the build you think you are.
+
+### Your own home-screen pictures
+
+The repository only has placeholder pictures for the LiveArea. To use your
+own in your own builds (for example art you own, which must not be
+published), make them with `vita/livearea/make.py` and build with
+`--my-art`:
+
+    python3 vita/livearea/make.py ICON.jpg BACKGROUND.jpg
+    ./build.sh --my-art
+
+`make.py` (needs `sudo apt install python3-pil`) writes the bubble icon
+(128x128), the LiveArea background (840x500) and the Start button picture
+(280x158) into `livearea/`. A tall or wide icon picture is fitted inside the
+bubble on its own background colour rather than cropped. `--bg-x` and
+`--start-x` (0 = left, 1 = right, default 0.5) choose which part of a wide
+background is kept. `livearea/` and `.jpg` files are in `.gitignore`, and a
+plain `./build.sh` always uses the placeholders, so a VPK you publish never
+contains your pictures. Build releases without `--my-art`.
 
 ### Layout
 
